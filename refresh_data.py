@@ -12,7 +12,7 @@ def load_and_print_stats(file_path):
 
 if __name__ == '__main__':
     # Specify the path to your data file
-    file_path = 'path/to/your/data.csv'
+    file_path = 'path/to/your/israel-alerts.txt'
     
     # Call the function to load and print stats
     load_and_print_stats(file_path)
