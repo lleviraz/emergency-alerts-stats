@@ -317,6 +317,105 @@ def convergence_rate_chart(conv_df: pd.DataFrame, area: str) -> go.Figure:
     return fig
 
 
+def interactive_risk_windows_chart(df: pd.DataFrame) -> go.Figure:
+    """
+    Stacked bar chart of siren event counts per time-of-day bucket.
+    Bars are stacked by day-of-week.
+    A Plotly dropdown lets the user switch between 2 h, 4 h, and 6 h bucket sizes.
+    """
+    from transforms import SIREN_CATEGORIES
+
+    DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    DAY_COLORS = ["#e63946", "#f4a261", "#e9c46a", "#2a9d8f", "#264653", "#a8dadc", "#457b9d"]
+
+    sirens = df[df["category"].isin(SIREN_CATEGORIES)].dropna(subset=["hour", "day_of_week"])
+
+    # Build one set of 7 traces per window size (3 sizes × 7 days = 21 traces total)
+    all_traces: list[go.Bar] = []
+    visibility: dict[int, list[bool]] = {2: [], 4: [], 6: []}
+
+    for window_hours in (2, 4, 6):
+        n_buckets = 24 // window_hours
+        labels = [
+            f"{b * window_hours:02d}:00–{(b + 1) * window_hours:02d}:00"
+            for b in range(n_buckets)
+        ]
+
+        for dow in range(7):
+            dow_sirens = sirens[sirens["day_of_week"] == dow]
+            counts = [
+                int((dow_sirens["hour"] // window_hours == b).sum())
+                for b in range(n_buckets)
+            ]
+            all_traces.append(
+                go.Bar(
+                    x=labels,
+                    y=counts,
+                    name=DAY_NAMES[dow],
+                    marker_color=DAY_COLORS[dow],
+                    visible=(window_hours == 2),
+                    legendgroup=DAY_NAMES[dow],
+                    showlegend=(window_hours == 2),  # only show legend once
+                )
+            )
+
+        n_prev = len(all_traces)
+        for w, vis_list in visibility.items():
+            # The 7 traces just added belong to window_hours
+            is_this_window = w == window_hours
+            vis_list.extend([is_this_window] * 7)
+
+    fig = go.Figure(data=all_traces)
+
+    fig.update_layout(
+        barmode="stack",
+        title="Siren Events by Time-of-Day Window",
+        xaxis_title="Time of Day",
+        yaxis_title="Event Count",
+        template=_PLOTLY_TEMPLATE,
+        legend_title="Day of Week",
+        hovermode="x unified",
+        margin=dict(l=40, r=20, t=100, b=40),
+        updatemenus=[
+            dict(
+                buttons=[
+                    dict(
+                        label="2-hour windows",
+                        method="update",
+                        args=[
+                            {"visible": visibility[2]},
+                            {"title": "Siren Events by Time-of-Day Window (2 h buckets)"},
+                        ],
+                    ),
+                    dict(
+                        label="4-hour windows",
+                        method="update",
+                        args=[
+                            {"visible": visibility[4]},
+                            {"title": "Siren Events by Time-of-Day Window (4 h buckets)"},
+                        ],
+                    ),
+                    dict(
+                        label="6-hour windows",
+                        method="update",
+                        args=[
+                            {"visible": visibility[6]},
+                            {"title": "Siren Events by Time-of-Day Window (6 h buckets)"},
+                        ],
+                    ),
+                ],
+                direction="down",
+                showactive=True,
+                x=0.0,
+                xanchor="left",
+                y=1.18,
+                yanchor="top",
+            )
+        ],
+    )
+    return fig
+
+
 def daily_pre_alert_siren_chart(daily_df: pd.DataFrame) -> go.Figure:
     """
     Grouped bar chart: each day has up to 2 bars — Pre-Alert and Siren.

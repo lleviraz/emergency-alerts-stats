@@ -407,26 +407,40 @@ def _make_features(hour: int, dow: int):
 
 
 def train_area_model(
-    df: pd.DataFrame, location_en: str, window_minutes: int = 15
+    df: pd.DataFrame,
+    location_en: str,
+    window_minutes: int = 15,
+    progress_cb=None,
 ) -> tuple:
     """
     Train a Ridge regression on historical pre-alert → siren pairs for the area.
 
+    progress_cb(fraction: float, text: str) is called at key stages if provided.
     Returns (model_state_dict, error_str).
     model_state_dict is None when there is insufficient training data.
     """
     import numpy as np
     from sklearn.linear_model import Ridge
 
+    def _cb(f, t):
+        if progress_cb:
+            progress_cb(f, t)
+
+    _cb(0.05, "Filtering area data…")
     area_df = filter_by_location(df, location_en).sort_values("parsed_alertDate")
+
+    _cb(0.15, "Identifying pre-alerts & sirens…")
     pre_alerts = area_df[area_df["category"].isin(PRE_ALERT_CATEGORIES)].reset_index(drop=True)
     sirens = area_df[area_df["category"].isin(SIREN_CATEGORIES)].reset_index(drop=True)
 
     window = pd.Timedelta(minutes=window_minutes)
     X: list[list[float]] = []
     y: list[float] = []
+    n_pre = len(pre_alerts)
 
-    for _, pre in pre_alerts.iterrows():
+    for i, (_, pre) in enumerate(pre_alerts.iterrows()):
+        if n_pre > 0:
+            _cb(0.20 + 0.55 * (i / n_pre), f"Matching pairs… {i}/{n_pre}")
         t = pre["parsed_alertDate"]
         if pd.isnull(t):
             continue
@@ -440,14 +454,19 @@ def train_area_model(
 
     n = len(X)
     if n < 5:
+        _cb(1.0, "Insufficient data")
         return None, (
             f"Only {n} matched pre→siren pair(s) found for '{location_en}' "
             "(need ≥ 5). Try a busier area or load more data."
         )
 
+    _cb(0.80, "Building feature matrix…")
     X_arr, y_arr = np.array(X), np.array(y)
+
+    _cb(0.90, "Fitting Ridge regression…")
     model = Ridge()
     model.fit(X_arr, y_arr)
+    _cb(1.0, "Complete")
 
     return {
         "model": model,

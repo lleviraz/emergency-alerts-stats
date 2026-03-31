@@ -13,6 +13,7 @@ from charts import (
     convergence_rate_chart,
     daily_pre_alert_siren_chart,
     hourly_heatmap,
+    interactive_risk_windows_chart,
     monthly_trend_chart,
     prediction_distribution_chart,
     timeline_chart,
@@ -162,8 +163,15 @@ with st.sidebar:
                 df_full, include_drills=False, selected_category_ids=None
             )
             df_history_area_train = filter_by_location(df_history_train, selected_area)
-            with st.spinner(f"Training on {selected_area} history…"):
-                model_state, err = train_area_model(df_history_area_train, selected_area)
+            _pbar = st.progress(0.0, text="Starting…")
+
+            def _train_progress(fraction: float, text: str) -> None:
+                _pbar.progress(fraction, text=text)
+
+            model_state, err = train_area_model(
+                df_history_area_train, selected_area, progress_cb=_train_progress
+            )
+            _pbar.empty()
             if err:
                 st.warning(err)
             else:
@@ -356,9 +364,9 @@ with tab_area:
 
             st.divider()
 
-            # ── Convergence rate over time ───────────────────────────────────
+            # ── Convergence rate over time (respects N-days slider) ──────────
             st.subheader("Convergence Rate Over Time")
-            conv_df = convergence_rate_over_time(df_history_area, selected_area, window_minutes=15)
+            conv_df = convergence_rate_over_time(df_area, selected_area, window_minutes=15)
             st.plotly_chart(
                 convergence_rate_chart(conv_df, selected_area),
                 width="stretch",
@@ -366,7 +374,18 @@ with tab_area:
             )
             st.caption(
                 "% of pre-alerts followed by an actual siren within 15 minutes.  "
-                "Red line = 7-day rolling average."
+                "Red line = 7-day rolling average. Affected by the time-range slider."
+            )
+
+            st.divider()
+
+            # ── Interactive risk windows ─────────────────────────────────────
+            st.subheader("Siren Events by Time-of-Day Window")
+            st.caption("Use the dropdown inside the chart to switch between 2 h, 4 h, and 6 h buckets.")
+            st.plotly_chart(
+                interactive_risk_windows_chart(df_history_area),
+                width="stretch",
+                key="risk_windows_chart",
             )
 
             st.divider()
