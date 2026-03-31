@@ -20,7 +20,12 @@ from charts import (
     timeline_chart,
     top_locations_chart,
 )
-from data_loader import load_dashboard_df, stream_download
+from data_loader import (
+    load_dashboard_df,
+    load_from_local,
+    local_cache_info,
+    stream_download,
+)
 from transforms import (
     CATEGORY_MAP,
     DRILL_CATEGORIES,
@@ -58,6 +63,19 @@ for _key, _default in [("df", None), ("loaded_at", None), ("model_state", None)]
     if _key not in st.session_state:
         st.session_state[_key] = _default
 
+# ── Auto-load from local cache on first run ───────────────────────────────────
+if st.session_state["df"] is None:
+    _cache_bytes = load_from_local()
+    if _cache_bytes is not None:
+        with st.spinner("Loading local data cache…"):
+            _raw = load_dashboard_df(_cache_bytes)
+            _raw = apply_english_labels(_raw)
+            _raw = apply_english_locations(_raw)
+        st.session_state["df"] = _raw
+        _, _mtime = local_cache_info()
+        st.session_state["loaded_at"] = _mtime
+        st.rerun()
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("Controls")
@@ -86,9 +104,25 @@ with st.sidebar:
             status_text.empty()
             st.error(f"Failed to load data: {exc}")
 
-    if st.session_state["loaded_at"]:
+    # ── Data freshness ──────────────────────────────────────────────────────
+    cache_exists, file_mtime = local_cache_info()
+    if cache_exists and file_mtime:
+        age_hours = (datetime.now() - file_mtime).total_seconds() / 3600
+        if age_hours < 24:
+            freshness = f"{age_hours:.0f}h ago"
+            freshness_color = "🟢"
+        elif age_hours < 72:
+            freshness = f"{age_hours / 24:.0f}d ago"
+            freshness_color = "🟡"
+        else:
+            freshness = f"{age_hours / 24:.0f}d ago"
+            freshness_color = "🔴"
         st.caption(
-            f"Last loaded: {st.session_state['loaded_at'].strftime('%Y-%m-%d %H:%M:%S')}"
+            f"{freshness_color} Local file: **{file_mtime.strftime('%Y-%m-%d %H:%M')}** ({freshness})"
+        )
+    elif st.session_state["loaded_at"]:
+        st.caption(
+            f"Loaded: {st.session_state['loaded_at'].strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
     st.divider()

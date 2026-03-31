@@ -1,0 +1,4 @@
+israel-alerts.csv
+__pycache__/
+*.pyc
+.venv/
