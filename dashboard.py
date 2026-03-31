@@ -30,11 +30,14 @@ from transforms import (
     filter_by_location,
     filter_categories,
     get_all_locations,
+    heatmap_insights,
     hourly_heatmap_data,
     kpi_delta,
     kpi_summary,
     monthly_counts,
+    predict_time_to_siren_now,
     top_locations,
+    train_area_model,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -46,10 +49,9 @@ st.set_page_config(
 )
 
 # ── Session state init ────────────────────────────────────────────────────────
-if "df" not in st.session_state:
-    st.session_state["df"] = None
-if "loaded_at" not in st.session_state:
-    st.session_state["loaded_at"] = None
+for _key, _default in [("df", None), ("loaded_at", None), ("model_state", None)]:
+    if _key not in st.session_state:
+        st.session_state[_key] = _default
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -71,6 +73,7 @@ with st.sidebar:
             raw = apply_english_locations(raw)
             st.session_state["df"] = raw
             st.session_state["loaded_at"] = datetime.now()
+            st.session_state["model_state"] = None  # invalidate stale model
             progress_bar.empty()
             status_text.empty()
             st.rerun()
@@ -109,7 +112,7 @@ with st.sidebar:
         last_x_days = st.select_slider(
             "Show last N days",
             options=DAY_OPTIONS,
-            value=90,
+            value=30,
             format_func=lambda v: DAY_LABELS.get(v, f"Last {v} days"),
         )
         start_date = max(min_date, max_date - timedelta(days=last_x_days))
@@ -120,11 +123,53 @@ with st.sidebar:
         # ── Area filter ─────────────────────────────────────────────────────
         st.subheader("Area Filter")
         all_locations = get_all_locations(df_full)
+        area_options = ["(All areas)"] + all_locations
+        default_idx = area_options.index("Kfar Netter") if "Kfar Netter" in area_options else 0
         selected_area = st.selectbox(
             "Focus on area",
-            options=["(All areas)"] + all_locations,
-            index=0,
+            options=area_options,
+            index=default_idx,
         )
+
+        st.divider()
+
+        # ── Model training (sidebar) ─────────────────────────────────────────
+        st.subheader("Prediction Model")
+        area_active_sidebar = selected_area != "(All areas)"
+
+        ms = st.session_state["model_state"]
+        if ms:
+            trained_for = ms["location"]
+            stale = trained_for != selected_area
+            status_icon = "⚠️" if stale else "✅"
+            st.caption(
+                f"{status_icon} Model: **{trained_for}**  \n"
+                f"Trained at {ms['trained_at']} · {ms['n_samples']} samples"
+            )
+            if stale:
+                st.caption("Area changed — retrain for accurate predictions.")
+
+        train_label = (
+            f"🧠 Train model for {selected_area}"
+            if area_active_sidebar
+            else "🧠 Train model  *(select an area first)*"
+        )
+        if st.button(train_label, use_container_width=True, disabled=not area_active_sidebar):
+            df_history_train = filter_categories(
+                df_full, include_drills=False, selected_category_ids=None
+            )
+            df_history_area_train = filter_by_location(df_history_train, selected_area)
+            with st.spinner(f"Training on {selected_area} history…"):
+                model_state, err = train_area_model(df_history_area_train, selected_area)
+            if err:
+                st.warning(err)
+            else:
+                st.session_state["model_state"] = model_state
+                st.success(
+                    f"Model ready · {model_state['n_samples']} paired events · "
+                    f"avg {model_state['historical_avg_min']:.1f} min"
+                )
+                st.rerun()
 
         st.divider()
 
@@ -166,14 +211,17 @@ if st.session_state["df"] is None:
     )
     st.stop()
 
-# Apply date + category filters
+# ── Derived DataFrames ────────────────────────────────────────────────────────
 df_full = st.session_state["df"]
+area_active = selected_area != "(All areas)"
+
 df = filter_by_date_range(df_full, start_date, end_date)
 df = filter_categories(df, include_drills=include_drills, selected_category_ids=selected_ids)
 
-# Apply area filter (for area-specific views)
-area_active = selected_area != "(All areas)"
 df_area = filter_by_location(df, selected_area) if area_active else df
+
+df_history = filter_categories(df_full, include_drills=include_drills, selected_category_ids=selected_ids)
+df_history_area = filter_by_location(df_history, selected_area) if area_active else df_history
 
 if df.empty:
     st.warning("No events match the current filters. Try a wider time range or more alert types.")
@@ -192,16 +240,41 @@ with tab_area:
             "Select an **area** in the sidebar to see timing statistics and "
             "pre-alert → siren analytics for that location."
         )
-        # Still show the daily pre-alert/siren chart for all areas
         st.subheader("Daily Pre-Alerts vs Sirens (all areas)")
         daily_ps = daily_pre_alert_siren_counts(df)
-        st.plotly_chart(daily_pre_alert_siren_chart(daily_ps), width="stretch")
+        st.plotly_chart(daily_pre_alert_siren_chart(daily_ps), width="stretch", key="daily_ps_all")
+
     else:
         st.subheader(f"Area: {selected_area}")
 
         if df_area.empty:
             st.warning(f"No events found for **{selected_area}** in the selected time range.")
         else:
+            # ── Pre-alert now button (inference only) ───────────────────────
+            ms = st.session_state["model_state"]
+            model_ready = ms is not None and ms.get("location") == selected_area
+
+            if st.button("🚨 Pre-alert now...", type="primary", use_container_width=True):
+                if not model_ready:
+                    st.warning(
+                        "No trained model for this area yet. "
+                        "Click **🧠 Train model** in the sidebar first."
+                    )
+                else:
+                    predicted = predict_time_to_siren_now(ms)
+                    st.error(
+                        f"### ⚠️ Pre-Alert Detected — {selected_area}\n\n"
+                        f"**Estimated time to siren: {predicted:.1f} minutes**\n\n"
+                        f"Historical avg: {ms['historical_avg_min']:.1f} ± "
+                        f"{ms['historical_std_min']:.1f} min  "
+                        f"· {ms['n_samples']} training events"
+                    )
+
+            if not model_ready:
+                st.caption("⚠️ Train the model in the sidebar for siren-time predictions.")
+
+            st.divider()
+
             # ── KPI row for area ────────────────────────────────────────────
             kpi = kpi_summary(df_area)
             c1, c2, c3, c4 = st.columns(4)
@@ -214,71 +287,77 @@ with tab_area:
 
             # ── Timing analytics ────────────────────────────────────────────
             st.subheader("Pre-Alert Timing Analysis")
-
             with st.spinner("Computing timing statistics…"):
-                timings = area_timings(df_area, selected_area, window_minutes=60)
+                timings = area_timings(df_history_area, selected_area, window_minutes=15)
 
             if timings["n_pre_alerts"] == 0:
-                st.info("No pre-alerts found for this area in the selected time range.")
+                st.info("No pre-alerts found for this area in the full dataset.")
             else:
                 t1, t2, t3 = st.columns(3)
 
-                # 3.1 — Pre-alert → Siren
                 avg_ps = timings["avg_pre_to_siren_min"]
                 t1.metric(
                     "Avg Pre-Alert → Siren",
                     f"{avg_ps:.1f} min" if avg_ps is not None else "N/A",
-                    help="Average minutes from a pre-alert to the next siren in this area (within 60-min window)",
+                    help="Average minutes from a pre-alert to the next siren (within 15-min window)",
                 )
 
-                # 3.2 — Pre-alert → All-Clear
                 avg_pc = timings["avg_pre_to_clear_min"]
                 t2.metric(
                     "Avg Pre-Alert → All-Clear",
                     f"{avg_pc:.1f} min" if avg_pc is not None else "N/A",
-                    help="Average minutes from a pre-alert to the next all-clear in this area (within 60-min window)",
+                    help="Average minutes from a pre-alert to the next all-clear (within 15-min window)",
                 )
 
-                # 3.3 — Convergence rate
                 rate = timings["convergence_rate"]
                 t3.metric(
                     "Convergence Rate",
                     f"{rate * 100:.1f}%" if rate is not None else "N/A",
                     help=(
                         f"{timings['n_converged']} of {timings['n_pre_alerts']} pre-alerts "
-                        "were followed by an actual siren within 60 minutes"
+                        "were followed by an actual siren within 15 minutes"
                     ),
                 )
 
                 st.caption(
                     f"Based on **{timings['n_pre_alerts']}** pre-alerts and "
-                    f"**{timings['n_sirens']}** sirens in **{selected_area}** "
-                    f"from {start_date} to {end_date}."
+                    f"**{timings['n_sirens']}** sirens in **{selected_area}** (full dataset)."
                 )
 
             st.divider()
 
-            # ── 3.5 — Daily bar chart ───────────────────────────────────────
+            # ── Daily bar chart ─────────────────────────────────────────────
             st.subheader("Daily Pre-Alerts vs Sirens")
             daily_ps = daily_pre_alert_siren_counts(df_area)
-            st.plotly_chart(daily_pre_alert_siren_chart(daily_ps), width="stretch")
+            st.plotly_chart(
+                daily_pre_alert_siren_chart(daily_ps), width="stretch", key="daily_ps_area"
+            )
 
             st.divider()
 
-            # ── Top sub-locations within area ───────────────────────────────
+            # ── Category breakdown for area ─────────────────────────────────
             st.subheader("Event Breakdown by Type")
             cat_df_area = category_totals(df_area)
-            st.plotly_chart(category_breakdown_chart(cat_df_area), width="stretch")
+            st.plotly_chart(
+                category_breakdown_chart(cat_df_area), width="stretch", key="cat_breakdown_area"
+            )
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAB 2 — Overview
+# TAB 2 — Overview (scoped to area when active)
 # ════════════════════════════════════════════════════════════════════════════
 with tab_overview:
 
+    df_view = df_area
+    df_view_history = df_history_area
+
+    if area_active and df_area.empty:
+        st.warning(f"No events found for **{selected_area}** in the selected time range.")
+        st.stop()
+
     # ── KPI row ─────────────────────────────────────────────────────────────
-    kpi = kpi_summary(df)
-    deltas = kpi_delta(df_full, start_date, end_date)
+    kpi = kpi_summary(df_view)
+    deltas = kpi_delta(df_full if not area_active else df_history_area, start_date, end_date)
 
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Total Events", f"{kpi['total']:,}", delta=int(deltas.get("total", 0)))
@@ -287,48 +366,64 @@ with tab_overview:
     col4.metric("All-Clear Sent", f"{kpi['all_clear']:,}", delta=int(deltas.get("all_clear", 0)))
     col5.metric("Unique Locations", f"{kpi['unique_locations']:,}")
 
+    area_label = f" · {selected_area}" if area_active else ""
     st.caption(
-        f"Showing **{kpi['total']:,}** events from **{start_date}** to **{end_date}**  |  "
+        f"Showing **{kpi['total']:,}** events from **{start_date}** to **{end_date}**{area_label}  |  "
         f"Last 24 h: **{kpi['last_24h']:,}**  |  Last 7 days: **{kpi['last_7d']:,}**"
     )
 
     st.divider()
 
     # ── Timeline ─────────────────────────────────────────────────────────────
-    weekly = daily_counts(df)
-    st.plotly_chart(timeline_chart(weekly), width="stretch")
+    weekly = daily_counts(df_view)
+    st.plotly_chart(timeline_chart(weekly), width="stretch", key="timeline_overview")
 
     # ── Locations + category breakdown ───────────────────────────────────────
     left, right = st.columns([3, 2])
     with left:
-        loc_df = top_locations(df, n=top_n)
-        st.plotly_chart(top_locations_chart(loc_df), width="stretch")
+        loc_df = top_locations(df_view, n=top_n)
+        st.plotly_chart(top_locations_chart(loc_df), width="stretch", key="top_locations_overview")
     with right:
-        cat_df = category_totals(df)
-        st.plotly_chart(category_breakdown_chart(cat_df), width="stretch")
+        cat_df = category_totals(df_view)
+        st.plotly_chart(
+            category_breakdown_chart(cat_df), width="stretch", key="cat_breakdown_overview"
+        )
 
     # ── Monthly trend + heatmap ───────────────────────────────────────────────
     left2, right2 = st.columns(2)
     with left2:
-        monthly_df = monthly_counts(df)
-        st.plotly_chart(monthly_trend_chart(monthly_df), width="stretch")
+        monthly_df = monthly_counts(df_view_history)
+        st.plotly_chart(monthly_trend_chart(monthly_df), width="stretch", key="monthly_overview")
     with right2:
-        heatmap_df = hourly_heatmap_data(df)
-        st.plotly_chart(hourly_heatmap(heatmap_df), width="stretch")
+        heatmap_df = hourly_heatmap_data(df_view_history)
+        st.plotly_chart(hourly_heatmap(heatmap_df), width="stretch", key="heatmap_overview")
+
+        insights = heatmap_insights(df_view_history)
+        if insights:
+            st.markdown(
+                "**High-risk windows"
+                + (f" — {selected_area}" if area_active else "")
+                + ":**"
+            )
+            for insight in insights:
+                st.markdown(f"- {insight}")
 
     # ── Raw data table ────────────────────────────────────────────────────────
     with st.expander("Raw data (filtered)"):
         display_cols = ["alertDate", "location_en", "category_en", "category_desc"]
-        display_cols = [c for c in display_cols if c in df.columns]
+        display_cols = [c for c in display_cols if c in df_view.columns]
         st.dataframe(
-            df[display_cols].sort_values("alertDate", ascending=False).reset_index(drop=True),
+            df_view[display_cols]
+            .sort_values("alertDate", ascending=False)
+            .reset_index(drop=True),
             width="stretch",
             height=400,
+            key="raw_data_table",
         )
-        csv_bytes = df[display_cols].to_csv(index=False).encode("utf-8")
+        csv_bytes_dl = df_view[display_cols].to_csv(index=False).encode("utf-8")
         st.download_button(
             label="Download filtered data as CSV",
-            data=csv_bytes,
+            data=csv_bytes_dl,
             file_name=f"israel_alerts_{start_date}_{end_date}.csv",
             mime="text/csv",
         )

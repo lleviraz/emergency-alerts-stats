@@ -199,16 +199,17 @@ def daily_counts(df: pd.DataFrame) -> pd.DataFrame:
 def monthly_counts(df: pd.DataFrame) -> pd.DataFrame:
     """
     Returns total siren-type events per month.
-    Columns: month (Period), count.
+    Columns: month_dt (datetime), count.
     """
     sirens_df = df[df["category"].isin(SIREN_CATEGORIES)].copy()
-    sirens_df["month"] = sirens_df["parsed_date"].dt.to_period("M")
+    sirens_df = sirens_df.dropna(subset=["parsed_date"])
+    # Convert to month-start timestamp directly — avoids Period groupby issues
+    sirens_df["month_dt"] = sirens_df["parsed_date"].values.astype("datetime64[M]")
     grouped = (
-        sirens_df.groupby("month")
+        sirens_df.groupby("month_dt")
         .size()
         .reset_index(name="count")
     )
-    grouped["month_dt"] = grouped["month"].dt.to_timestamp()
     return grouped.sort_values("month_dt")
 
 
@@ -281,7 +282,7 @@ def filter_by_location(df: pd.DataFrame, location_en: str) -> pd.DataFrame:
 
 
 def area_timings(
-    df: pd.DataFrame, location_en: str, window_minutes: int = 60
+    df: pd.DataFrame, location_en: str, window_minutes: int = 15
 ) -> dict:
     """
     For a given area, compute timing statistics between event types.
@@ -355,3 +356,118 @@ def daily_pre_alert_siren_counts(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index(name="count")
     )
     return grouped.sort_values("parsed_date")
+
+
+# ── Heatmap insights ─────────────────────────────────────────────────────────
+
+_DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def heatmap_insights(df: pd.DataFrame, top_n: int = 3) -> list[str]:
+    """
+    Return descriptive strings for the top N busiest day+hour combinations
+    for siren-type events, suitable for display below the heatmap.
+    """
+    sirens_df = df[df["category"].isin(SIREN_CATEGORIES)].dropna(
+        subset=["day_of_week", "hour"]
+    )
+    if sirens_df.empty:
+        return []
+
+    counts = (
+        sirens_df.groupby(["day_of_week", "hour"])
+        .size()
+        .reset_index(name="count")
+        .sort_values("count", ascending=False)
+    )
+
+    insights = []
+    for _, row in counts.head(top_n).iterrows():
+        day = _DAY_NAMES[int(row["day_of_week"])]
+        hour = int(row["hour"])
+        count = int(row["count"])
+        insights.append(
+            f"**{day} {hour:02d}:00–{hour + 1:02d}:00** · {count:,} siren events"
+        )
+    return insights
+
+
+# ── ML prediction ─────────────────────────────────────────────────────────────
+
+def _make_features(hour: int, dow: int):
+    """Build the 6-element feature vector for a given hour + day-of-week."""
+    import numpy as np
+    return [
+        hour, dow,
+        np.sin(2 * np.pi * hour / 24),
+        np.cos(2 * np.pi * hour / 24),
+        np.sin(2 * np.pi * dow / 7),
+        np.cos(2 * np.pi * dow / 7),
+    ]
+
+
+def train_area_model(
+    df: pd.DataFrame, location_en: str, window_minutes: int = 15
+) -> tuple:
+    """
+    Train a Ridge regression on historical pre-alert → siren pairs for the area.
+
+    Returns (model_state_dict, error_str).
+    model_state_dict is None when there is insufficient training data.
+    """
+    import numpy as np
+    from sklearn.linear_model import Ridge
+
+    area_df = filter_by_location(df, location_en).sort_values("parsed_alertDate")
+    pre_alerts = area_df[area_df["category"].isin(PRE_ALERT_CATEGORIES)].reset_index(drop=True)
+    sirens = area_df[area_df["category"].isin(SIREN_CATEGORIES)].reset_index(drop=True)
+
+    window = pd.Timedelta(minutes=window_minutes)
+    X: list[list[float]] = []
+    y: list[float] = []
+
+    for _, pre in pre_alerts.iterrows():
+        t = pre["parsed_alertDate"]
+        if pd.isnull(t):
+            continue
+        next_sirens = sirens[
+            (sirens["parsed_alertDate"] > t) & (sirens["parsed_alertDate"] <= t + window)
+        ]
+        if not next_sirens.empty:
+            delta_min = (next_sirens["parsed_alertDate"].min() - t).total_seconds() / 60
+            X.append(_make_features(t.hour, t.dayofweek))
+            y.append(delta_min)
+
+    n = len(X)
+    if n < 5:
+        return None, (
+            f"Only {n} matched pre→siren pair(s) found for '{location_en}' "
+            "(need ≥ 5). Try a busier area or load more data."
+        )
+
+    X_arr, y_arr = np.array(X), np.array(y)
+    model = Ridge()
+    model.fit(X_arr, y_arr)
+
+    return {
+        "model": model,
+        "location": location_en,
+        "window_minutes": window_minutes,
+        "n_samples": n,
+        "historical_avg_min": float(np.mean(y_arr)),
+        "historical_std_min": float(np.std(y_arr)),
+        "trained_at": pd.Timestamp.now().strftime("%H:%M:%S"),
+    }, None
+
+
+def predict_time_to_siren_now(model_state: dict) -> float:
+    """
+    Instant inference using a previously trained model_state.
+    Returns predicted minutes (clamped to [0.3, window_minutes]).
+    """
+    import numpy as np
+
+    now = pd.Timestamp.now()
+    X = np.array([_make_features(now.hour, now.dayofweek)])
+    raw = float(model_state["model"].predict(X)[0])
+    return float(np.clip(raw, 0.3, model_state["window_minutes"]))
