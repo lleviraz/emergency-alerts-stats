@@ -179,6 +179,46 @@ def hourly_heatmap(heatmap_df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def daily_pre_alert_siren_chart(daily_df: pd.DataFrame) -> go.Figure:
+    """
+    Grouped bar chart: each day has up to 2 bars — Pre-Alert and Siren.
+    daily_df columns: parsed_date, type ('Pre-Alert' or 'Siren'), count.
+    """
+    if daily_df.empty:
+        return _empty_figure("No pre-alert / siren data for selected range")
+
+    colors = {
+        "Pre-Alert": CATEGORY_COLORS["Pre-Alert"],
+        "Siren": CATEGORY_COLORS["Rocket / Missile Fire"],
+    }
+
+    fig = go.Figure()
+    for event_type in ["Siren", "Pre-Alert"]:
+        subset = daily_df[daily_df["type"] == event_type]
+        if subset.empty:
+            continue
+        fig.add_trace(
+            go.Bar(
+                x=subset["parsed_date"],
+                y=subset["count"],
+                name=event_type,
+                marker_color=colors.get(event_type, "#888"),
+            )
+        )
+
+    fig.update_layout(
+        title="Daily Pre-Alerts vs Sirens",
+        xaxis_title="Date",
+        yaxis_title="Events",
+        barmode="group",
+        template=_PLOTLY_TEMPLATE,
+        legend_title_text="Type",
+        hovermode="x unified",
+        margin=dict(l=40, r=20, t=50, b=40),
+    )
+    return fig
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _empty_figure(message: str) -> go.Figure:

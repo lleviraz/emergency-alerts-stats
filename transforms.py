@@ -256,3 +256,102 @@ def hourly_heatmap_data(df: pd.DataFrame) -> pd.DataFrame:
     pivot = pivot.reindex(range(7), fill_value=0)
     pivot.index = [DAY_LABELS[i] for i in pivot.index]
     return pivot
+
+
+# ── Area helpers ─────────────────────────────────────────────────────────────
+
+def get_all_locations(df: pd.DataFrame) -> list[str]:
+    """Return a sorted list of all unique English location names in the dataset."""
+    return sorted(
+        df["location_en"]
+        .dropna()
+        .str.split(", ")
+        .explode()
+        .str.strip()
+        .loc[lambda s: s != ""]
+        .unique()
+        .tolist()
+    )
+
+
+def filter_by_location(df: pd.DataFrame, location_en: str) -> pd.DataFrame:
+    """Return only rows that include location_en in their location_en field."""
+    mask = df["location_en"].str.contains(location_en, na=False, regex=False)
+    return df[mask]
+
+
+def area_timings(
+    df: pd.DataFrame, location_en: str, window_minutes: int = 60
+) -> dict:
+    """
+    For a given area, compute timing statistics between event types.
+
+    Returns:
+      n_pre_alerts        : total pre-alerts in area
+      n_sirens            : total sirens in area
+      avg_pre_to_siren_min: average minutes from pre-alert to next siren (or None)
+      avg_pre_to_clear_min: average minutes from pre-alert to next all-clear (or None)
+      convergence_rate    : fraction of pre-alerts followed by a siren within window
+      n_converged         : count of pre-alerts that preceded a siren
+    """
+    area_df = filter_by_location(df, location_en).sort_values("parsed_alertDate")
+
+    pre_alerts = area_df[area_df["category"].isin(PRE_ALERT_CATEGORIES)].reset_index(drop=True)
+    sirens = area_df[area_df["category"].isin(SIREN_CATEGORIES)].reset_index(drop=True)
+    all_clears = area_df[area_df["category"].isin(ALL_CLEAR_CATEGORIES)].reset_index(drop=True)
+
+    window = pd.Timedelta(minutes=window_minutes)
+    pre_to_siren: list[float] = []
+    pre_to_clear: list[float] = []
+    n_converged = 0
+
+    for _, pre in pre_alerts.iterrows():
+        t = pre["parsed_alertDate"]
+        if pd.isnull(t):
+            continue
+
+        next_sirens = sirens[
+            (sirens["parsed_alertDate"] > t)
+            & (sirens["parsed_alertDate"] <= t + window)
+        ]
+        if not next_sirens.empty:
+            delta_sec = (next_sirens["parsed_alertDate"].min() - t).total_seconds()
+            pre_to_siren.append(delta_sec / 60)
+            n_converged += 1
+
+        next_clears = all_clears[
+            (all_clears["parsed_alertDate"] > t)
+            & (all_clears["parsed_alertDate"] <= t + window)
+        ]
+        if not next_clears.empty:
+            delta_sec = (next_clears["parsed_alertDate"].min() - t).total_seconds()
+            pre_to_clear.append(delta_sec / 60)
+
+    n_pre = len(pre_alerts)
+    return {
+        "n_pre_alerts": n_pre,
+        "n_sirens": len(sirens),
+        "avg_pre_to_siren_min": (sum(pre_to_siren) / len(pre_to_siren)) if pre_to_siren else None,
+        "avg_pre_to_clear_min": (sum(pre_to_clear) / len(pre_to_clear)) if pre_to_clear else None,
+        "convergence_rate": (n_converged / n_pre) if n_pre > 0 else None,
+        "n_converged": n_converged,
+    }
+
+
+def daily_pre_alert_siren_counts(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Daily counts of Pre-Alert vs Siren events.
+    Returns columns: parsed_date, type ('Pre-Alert' or 'Siren'), count.
+    """
+    relevant = df[
+        df["category"].isin(PRE_ALERT_CATEGORIES | SIREN_CATEGORIES)
+    ].copy()
+    relevant["type"] = relevant["category"].apply(
+        lambda c: "Pre-Alert" if c in PRE_ALERT_CATEGORIES else "Siren"
+    )
+    grouped = (
+        relevant.groupby(["parsed_date", "type"])
+        .size()
+        .reset_index(name="count")
+    )
+    return grouped.sort_values("parsed_date")
