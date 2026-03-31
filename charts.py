@@ -416,6 +416,44 @@ def interactive_risk_windows_chart(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def high_risk_windows_chart(risk_df: pd.DataFrame, area: str) -> go.Figure:
+    """
+    Horizontal bar chart of the top N highest-risk day+hour combinations,
+    sorted descending by siren event count.
+    risk_df columns: label, count.
+    """
+    if risk_df.empty:
+        return _empty_figure("Not enough siren data for this area")
+
+    df = risk_df.sort_values("count", ascending=True)  # ascending so top is at chart top
+
+    # Colour bars by count intensity
+    fig = go.Figure(
+        go.Bar(
+            x=df["count"],
+            y=df["label"],
+            orientation="h",
+            marker=dict(
+                color=df["count"],
+                colorscale="Reds",
+                showscale=True,
+                colorbar=dict(title="Events"),
+            ),
+            text=df["count"].apply(lambda v: f"{v:,}"),
+            textposition="outside",
+        )
+    )
+    fig.update_layout(
+        title=f"Top High-Risk Time Windows — {area}",
+        xaxis_title="Siren Events",
+        yaxis_title=None,
+        template=_PLOTLY_TEMPLATE,
+        margin=dict(l=200, r=80, t=50, b=40),
+        height=max(300, len(df) * 38),
+    )
+    return fig
+
+
 def daily_pre_alert_siren_chart(daily_df: pd.DataFrame) -> go.Figure:
     """
     Grouped bar chart: each day has up to 2 bars — Pre-Alert and Siren.

@@ -368,28 +368,37 @@ def heatmap_insights(df: pd.DataFrame, top_n: int = 3) -> list[str]:
     Return descriptive strings for the top N busiest day+hour combinations
     for siren-type events, suitable for display below the heatmap.
     """
+    data = high_risk_windows_data(df, top_n)
+    return [
+        f"**{row['label']}** · {row['count']:,} siren events"
+        for _, row in data.iterrows()
+    ]
+
+
+def high_risk_windows_data(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
+    """
+    Return a DataFrame of the top N busiest day+hour combinations for siren events.
+    Columns: label (str), day_of_week (int), hour (int), count (int).
+    Sorted descending by count.
+    """
     sirens_df = df[df["category"].isin(SIREN_CATEGORIES)].dropna(
         subset=["day_of_week", "hour"]
     )
     if sirens_df.empty:
-        return []
+        return pd.DataFrame(columns=["label", "day_of_week", "hour", "count"])
 
     counts = (
         sirens_df.groupby(["day_of_week", "hour"])
         .size()
         .reset_index(name="count")
         .sort_values("count", ascending=False)
+        .head(top_n)
     )
-
-    insights = []
-    for _, row in counts.head(top_n).iterrows():
-        day = _DAY_NAMES[int(row["day_of_week"])]
-        hour = int(row["hour"])
-        count = int(row["count"])
-        insights.append(
-            f"**{day} {hour:02d}:00–{hour + 1:02d}:00** · {count:,} siren events"
-        )
-    return insights
+    counts["label"] = counts.apply(
+        lambda r: f"{_DAY_NAMES[int(r['day_of_week'])]} {int(r['hour']):02d}:00–{int(r['hour']) + 1:02d}:00",
+        axis=1,
+    )
+    return counts[["label", "day_of_week", "hour", "count"]].reset_index(drop=True)
 
 
 # ── ML prediction ─────────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ from charts import (
     category_breakdown_chart,
     convergence_rate_chart,
     daily_pre_alert_siren_chart,
+    high_risk_windows_chart,
     hourly_heatmap,
     interactive_risk_windows_chart,
     monthly_trend_chart,
@@ -34,7 +35,7 @@ from transforms import (
     filter_by_location,
     filter_categories,
     get_all_locations,
-    heatmap_insights,
+    high_risk_windows_data,
     hourly_heatmap_data,
     kpi_delta,
     kpi_summary,
@@ -392,12 +393,15 @@ with tab_area:
 
             # ── High-risk days & times ───────────────────────────────────────
             st.subheader("High-Risk Days & Times")
-            risk_insights = heatmap_insights(df_history_area, top_n=10)
-            if risk_insights:
-                for i, insight in enumerate(risk_insights, 1):
-                    st.markdown(f"{i}. {insight}")
-            else:
+            risk_df = high_risk_windows_data(df_history_area, top_n=10)
+            if risk_df.empty:
                 st.info("Not enough siren data to compute high-risk windows for this area.")
+            else:
+                st.plotly_chart(
+                    high_risk_windows_chart(risk_df, selected_area),
+                    width="stretch",
+                    key="high_risk_chart",
+                )
 
 
 # ════════════════════════════════════════════════════════════════════════════
