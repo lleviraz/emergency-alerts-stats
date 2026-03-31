@@ -10,9 +10,11 @@ import streamlit as st
 
 from charts import (
     category_breakdown_chart,
+    convergence_rate_chart,
     daily_pre_alert_siren_chart,
     hourly_heatmap,
     monthly_trend_chart,
+    prediction_distribution_chart,
     timeline_chart,
     top_locations_chart,
 )
@@ -24,6 +26,7 @@ from transforms import (
     apply_english_locations,
     area_timings,
     category_totals,
+    convergence_rate_over_time,
     daily_counts,
     daily_pre_alert_siren_counts,
     filter_by_date_range,
@@ -262,15 +265,24 @@ with tab_area:
                     )
                 else:
                     predicted = predict_time_to_siren_now(ms)
-                    st.error(
-                        f"### ⚠️ Pre-Alert Detected — {selected_area}\n\n"
-                        f"**Estimated time to siren: {predicted:.1f} minutes**\n\n"
-                        f"Historical avg: {ms['historical_avg_min']:.1f} ± "
-                        f"{ms['historical_std_min']:.1f} min  "
-                        f"· {ms['n_samples']} training events"
-                    )
+                    st.session_state["last_prediction"] = predicted
 
-            if not model_ready:
+            if model_ready and "last_prediction" in st.session_state:
+                predicted = st.session_state["last_prediction"]
+                st.error(
+                    f"### ⚠️ Pre-Alert Detected — {selected_area}\n\n"
+                    f"**Estimated time to siren: {predicted:.1f} min**  "
+                    f"· CI [{ms['historical_min_min']:.1f} – {ms['historical_max_min']:.1f}] min  \n"
+                    f"Mean {ms['historical_avg_min']:.1f} ± {ms['historical_std_min']:.1f} min  "
+                    f"· Median {ms['historical_median_min']:.1f} min  "
+                    f"· {ms['n_samples']} training events"
+                )
+                st.plotly_chart(
+                    prediction_distribution_chart(ms, predicted),
+                    width="stretch",
+                    key="pred_dist",
+                )
+            elif not model_ready:
                 st.caption("⚠️ Train the model in the sidebar for siren-time predictions.")
 
             st.divider()
@@ -342,22 +354,45 @@ with tab_area:
                 category_breakdown_chart(cat_df_area), width="stretch", key="cat_breakdown_area"
             )
 
+            st.divider()
+
+            # ── Convergence rate over time ───────────────────────────────────
+            st.subheader("Convergence Rate Over Time")
+            conv_df = convergence_rate_over_time(df_history_area, selected_area, window_minutes=15)
+            st.plotly_chart(
+                convergence_rate_chart(conv_df, selected_area),
+                width="stretch",
+                key="conv_rate_chart",
+            )
+            st.caption(
+                "% of pre-alerts followed by an actual siren within 15 minutes.  "
+                "Red line = 7-day rolling average."
+            )
+
+            st.divider()
+
+            # ── High-risk days & times ───────────────────────────────────────
+            st.subheader("High-Risk Days & Times")
+            risk_insights = heatmap_insights(df_history_area, top_n=10)
+            if risk_insights:
+                for i, insight in enumerate(risk_insights, 1):
+                    st.markdown(f"{i}. {insight}")
+            else:
+                st.info("Not enough siren data to compute high-risk windows for this area.")
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 2 — Overview (scoped to area when active)
 # ════════════════════════════════════════════════════════════════════════════
 with tab_overview:
 
-    df_view = df_area
-    df_view_history = df_history_area
-
-    if area_active and df_area.empty:
-        st.warning(f"No events found for **{selected_area}** in the selected time range.")
-        st.stop()
+    # Overview is always unfiltered by area
+    df_view = df
+    df_view_history = df_history
 
     # ── KPI row ─────────────────────────────────────────────────────────────
     kpi = kpi_summary(df_view)
-    deltas = kpi_delta(df_full if not area_active else df_history_area, start_date, end_date)
+    deltas = kpi_delta(df_full, start_date, end_date)
 
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Total Events", f"{kpi['total']:,}", delta=int(deltas.get("total", 0)))
@@ -366,9 +401,8 @@ with tab_overview:
     col4.metric("All-Clear Sent", f"{kpi['all_clear']:,}", delta=int(deltas.get("all_clear", 0)))
     col5.metric("Unique Locations", f"{kpi['unique_locations']:,}")
 
-    area_label = f" · {selected_area}" if area_active else ""
     st.caption(
-        f"Showing **{kpi['total']:,}** events from **{start_date}** to **{end_date}**{area_label}  |  "
+        f"Showing **{kpi['total']:,}** events from **{start_date}** to **{end_date}** (all areas)  |  "
         f"Last 24 h: **{kpi['last_24h']:,}**  |  Last 7 days: **{kpi['last_7d']:,}**"
     )
 
@@ -397,16 +431,6 @@ with tab_overview:
     with right2:
         heatmap_df = hourly_heatmap_data(df_view_history)
         st.plotly_chart(hourly_heatmap(heatmap_df), width="stretch", key="heatmap_overview")
-
-        insights = heatmap_insights(df_view_history)
-        if insights:
-            st.markdown(
-                "**High-risk windows"
-                + (f" — {selected_area}" if area_active else "")
-                + ":**"
-            )
-            for insight in insights:
-                st.markdown(f"- {insight}")
 
     # ── Raw data table ────────────────────────────────────────────────────────
     with st.expander("Raw data (filtered)"):

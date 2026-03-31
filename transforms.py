@@ -456,8 +456,52 @@ def train_area_model(
         "n_samples": n,
         "historical_avg_min": float(np.mean(y_arr)),
         "historical_std_min": float(np.std(y_arr)),
+        "historical_median_min": float(np.median(y_arr)),
+        "historical_min_min": float(y_arr.min()),
+        "historical_max_min": float(y_arr.max()),
+        "y_values": y_arr.tolist(),
         "trained_at": pd.Timestamp.now().strftime("%H:%M:%S"),
     }, None
+
+
+def convergence_rate_over_time(
+    df: pd.DataFrame, location_en: str, window_minutes: int = 15
+) -> pd.DataFrame:
+    """
+    Daily convergence rate for a given area: fraction of pre-alerts
+    that were followed by a siren within window_minutes.
+
+    Returns columns: date, convergence_rate (0–1), n_pre_alerts.
+    """
+    area_df = filter_by_location(df, location_en).sort_values("parsed_alertDate")
+    pre_alerts = area_df[area_df["category"].isin(PRE_ALERT_CATEGORIES)].reset_index(drop=True)
+    sirens = area_df[area_df["category"].isin(SIREN_CATEGORIES)].reset_index(drop=True)
+
+    if pre_alerts.empty:
+        return pd.DataFrame(columns=["date", "convergence_rate", "n_pre_alerts"])
+
+    window = pd.Timedelta(minutes=window_minutes)
+    records: list[dict] = []
+
+    for _, pre in pre_alerts.iterrows():
+        t = pre["parsed_alertDate"]
+        if pd.isnull(t):
+            continue
+        converged = not sirens[
+            (sirens["parsed_alertDate"] > t) & (sirens["parsed_alertDate"] <= t + window)
+        ].empty
+        records.append({"date": pre["parsed_date"], "converged": int(converged)})
+
+    if not records:
+        return pd.DataFrame(columns=["date", "convergence_rate", "n_pre_alerts"])
+
+    events = pd.DataFrame(records)
+    daily = (
+        events.groupby("date")
+        .agg(convergence_rate=("converged", "mean"), n_pre_alerts=("converged", "count"))
+        .reset_index()
+    )
+    return daily.sort_values("date")
 
 
 def predict_time_to_siren_now(model_state: dict) -> float:

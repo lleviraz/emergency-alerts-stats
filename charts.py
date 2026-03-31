@@ -179,6 +179,144 @@ def hourly_heatmap(heatmap_df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def prediction_distribution_chart(model_state: dict, predicted_min: float) -> go.Figure:
+    """
+    Histogram of historical pre-alert → siren times with vertical lines for
+    min, max, mean (±1σ band), median, and the model prediction.
+    """
+    import numpy as np
+
+    y = np.array(model_state["y_values"])
+    mean = model_state["historical_avg_min"]
+    std = model_state["historical_std_min"]
+    median = model_state["historical_median_min"]
+    y_min = model_state["historical_min_min"]
+    y_max = model_state["historical_max_min"]
+
+    fig = go.Figure()
+
+    # Histogram
+    fig.add_trace(
+        go.Histogram(
+            x=y,
+            nbinsx=min(30, max(10, len(y) // 2)),
+            name="Observed",
+            marker_color="#4a4e69",
+            opacity=0.75,
+        )
+    )
+
+    # ±1σ band
+    fig.add_vrect(
+        x0=max(0, mean - std),
+        x1=mean + std,
+        fillcolor="rgba(255, 209, 102, 0.15)",
+        line_width=0,
+        annotation_text="±1σ",
+        annotation_position="top left",
+        annotation_font_size=11,
+    )
+
+    # Min line
+    fig.add_vline(
+        x=y_min, line_dash="dot", line_color="#adb5bd", line_width=1.5,
+        annotation_text=f"Min {y_min:.1f}m", annotation_position="top right",
+        annotation_font_size=10,
+    )
+    # Max line
+    fig.add_vline(
+        x=y_max, line_dash="dot", line_color="#adb5bd", line_width=1.5,
+        annotation_text=f"Max {y_max:.1f}m", annotation_position="top left",
+        annotation_font_size=10,
+    )
+    # Mean line
+    fig.add_vline(
+        x=mean, line_dash="dash", line_color="#ffd166", line_width=2,
+        annotation_text=f"Mean {mean:.1f}m", annotation_position="top right",
+        annotation_font_size=11,
+    )
+    # Median line
+    fig.add_vline(
+        x=median, line_dash="dashdot", line_color="#06d6a0", line_width=2,
+        annotation_text=f"Median {median:.1f}m", annotation_position="top left",
+        annotation_font_size=11,
+    )
+    # Prediction line
+    fig.add_vline(
+        x=predicted_min, line_color="#e63946", line_width=3,
+        annotation_text=f"Prediction {predicted_min:.1f}m",
+        annotation_position="top right",
+        annotation_font_size=12,
+    )
+
+    fig.update_layout(
+        title=f"Pre-Alert → Siren Time Distribution ({model_state['n_samples']} events)",
+        xaxis_title="Minutes to Siren",
+        yaxis_title="Count",
+        template=_PLOTLY_TEMPLATE,
+        showlegend=False,
+        margin=dict(l=40, r=20, t=60, b=40),
+    )
+    return fig
+
+
+def convergence_rate_chart(conv_df: pd.DataFrame, area: str) -> go.Figure:
+    """
+    Line chart of daily convergence rate (% of pre-alerts followed by siren)
+    over time, with a rolling 7-day average smoothing.
+    """
+    if conv_df.empty:
+        return _empty_figure("No convergence data available")
+
+    import numpy as np
+
+    # Rolling 7-day mean (pad with NaN for short series)
+    rolling = (
+        conv_df.set_index("date")["convergence_rate"]
+        .rolling(7, min_periods=1)
+        .mean()
+        .reset_index()
+    )
+
+    fig = go.Figure()
+
+    # Raw daily dots
+    fig.add_trace(
+        go.Scatter(
+            x=conv_df["date"],
+            y=conv_df["convergence_rate"] * 100,
+            mode="markers",
+            marker=dict(color="#adb5bd", size=5, opacity=0.5),
+            name="Daily",
+            hovertemplate="%{x}<br>%{y:.0f}%<extra></extra>",
+        )
+    )
+
+    # Smoothed line
+    fig.add_trace(
+        go.Scatter(
+            x=rolling["date"],
+            y=rolling["convergence_rate"] * 100,
+            mode="lines",
+            line=dict(color="#e63946", width=2),
+            name="7-day avg",
+            hovertemplate="%{x}<br>%{y:.1f}%<extra></extra>",
+        )
+    )
+
+    fig.update_layout(
+        title=f"Convergence Rate Over Time — {area}",
+        xaxis_title="Date",
+        yaxis_title="% Pre-Alerts → Siren",
+        yaxis=dict(range=[0, 105]),
+        template=_PLOTLY_TEMPLATE,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified",
+        margin=dict(l=60, r=20, t=60, b=40),
+    )
+    return fig
+
+
 def daily_pre_alert_siren_chart(daily_df: pd.DataFrame) -> go.Figure:
     """
     Grouped bar chart: each day has up to 2 bars — Pre-Alert and Siren.
