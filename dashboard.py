@@ -78,7 +78,6 @@ with st.sidebar:
             raw = apply_english_locations(raw)
             st.session_state["df"] = raw
             st.session_state["loaded_at"] = datetime.now()
-            st.session_state["model_state"] = None  # invalidate stale model
             progress_bar.empty()
             status_text.empty()
             st.rerun()
