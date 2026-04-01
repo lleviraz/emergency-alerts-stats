@@ -409,7 +409,18 @@ with tab_area:
             alert_active_now = st.session_state["alert_active"]
 
             if not alert_active_now:
-                if st.button("🚨 Pre-alert now...", type="primary", use_container_width=True):
+                if st.button(
+                    "🚨 Simulate a pre-alert event now",
+                    type="primary",
+                    use_container_width=True,
+                    help=(
+                        "Starts a live countdown timer from this moment. "
+                        "The regression model predicts how many minutes until a siren is expected, "
+                        "based on the current time of day and day of week. "
+                        "The classifier estimates the probability that a siren will actually follow. "
+                        "Click **✅ Click to mark the end of the event** to stop the timer."
+                    ),
+                ):
                     if not model_ready:
                         st.warning(
                             "No trained model for this area yet. "
@@ -512,7 +523,7 @@ with tab_area:
                 if not alert_active_now:
                     st.caption(
                         "Historical pre-alert → siren time distribution for this area.  "
-                        "Red line = historical mean. Press **🚨 Pre-alert now...** for a "
+                        "Red line = historical mean. Press **🚨 Simulate a pre-alert event now** for a "
                         "time-adjusted prediction."
                     )
 
