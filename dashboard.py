@@ -71,6 +71,7 @@ for _key, _default in [
     ("alert_started_at", None),
     ("last_prediction", None),
     ("last_p_siren", None),
+    ("active_area", None),
 ]:
     if _key not in st.session_state:
         st.session_state[_key] = _default
@@ -289,6 +290,13 @@ if st.session_state["df"] is None:
 # ── Derived DataFrames ────────────────────────────────────────────────────────
 df_full = st.session_state["df"]
 area_active = selected_area != "(All areas)"
+
+# ── Auto-stop any running event when the area changes ─────────────────────────
+if st.session_state["active_area"] != selected_area:
+    st.session_state["active_area"] = selected_area
+    if st.session_state["alert_active"]:
+        st.session_state["alert_active"] = False
+        st.session_state["alert_started_at"] = None
 
 df = filter_by_date_range(df_full, start_date, end_date)
 df = filter_categories(df, include_drills=include_drills, selected_category_ids=selected_ids)
