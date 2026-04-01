@@ -74,9 +74,18 @@ for _key, _default in [
     ("active_area", None),
     ("area_model_cache", {}),
     ("recent_areas", []),
+    ("pending_area", None),
 ]:
     if _key not in st.session_state:
         st.session_state[_key] = _default
+
+# ── Apply pending area selection BEFORE any widget is instantiated ────────────
+# Buttons cannot write to a widget key after it has rendered, so we stage the
+# desired area in "pending_area" and copy it into "area_select" here, at the
+# very top of the run, before the selectbox is created.
+if st.session_state["pending_area"] is not None:
+    st.session_state["area_select"] = st.session_state["pending_area"]
+    st.session_state["pending_area"] = None
 
 # ── Auto-load from local cache on first run ───────────────────────────────────
 if st.session_state["df"] is None:
@@ -193,7 +202,7 @@ with st.sidebar:
                 _has_model = _r in st.session_state["area_model_cache"]
                 _btn_label = f"{'🧠 ' if _has_model else ''}{_r}"
                 if st.button(_btn_label, key=f"recent_{_r}", use_container_width=True):
-                    st.session_state["area_select"] = _r
+                    st.session_state["pending_area"] = _r
                     st.rerun()
 
         st.divider()
