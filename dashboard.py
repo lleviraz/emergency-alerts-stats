@@ -429,10 +429,22 @@ with tab_area:
             # ── KPI row for area ────────────────────────────────────────────
             kpi = kpi_summary(df_area)
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Total Events", f"{kpi['total']:,}")
-            c2.metric("Sirens", f"{kpi['sirens']:,}")
-            c3.metric("Pre-Alerts", f"{kpi['pre_alerts']:,}")
-            c4.metric("All-Clear Sent", f"{kpi['all_clear']:,}")
+            c1.metric(
+                "Total Events", f"{kpi['total']:,}",
+                help="All alert events in this area for the selected time range.",
+            )
+            c2.metric(
+                "Sirens", f"{kpi['sirens']:,}",
+                help="Rocket/missile fire, hostile aircraft, infiltration, and other active-threat sirens.",
+            )
+            c3.metric(
+                "Pre-Alerts", f"{kpi['pre_alerts']:,}",
+                help="Early-warning notifications (category 14) issued before a potential siren.",
+            )
+            c4.metric(
+                "All-Clear Sent", f"{kpi['all_clear']:,}",
+                help="All-clear / relax notifications (category 13) indicating the threat has passed.",
+            )
 
             st.divider()
 
@@ -548,11 +560,26 @@ with tab_overview:
     deltas = kpi_delta(df_full, start_date, end_date)
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Total Events", f"{kpi['total']:,}", delta=int(deltas.get("total", 0)))
-    col2.metric("Sirens / Alerts", f"{kpi['sirens']:,}", delta=int(deltas.get("sirens", 0)))
-    col3.metric("Pre-Alerts", f"{kpi['pre_alerts']:,}", delta=int(deltas.get("pre_alerts", 0)))
-    col4.metric("All-Clear Sent", f"{kpi['all_clear']:,}", delta=int(deltas.get("all_clear", 0)))
-    col5.metric("Unique Locations", f"{kpi['unique_locations']:,}")
+    col1.metric(
+        "Total Events", f"{kpi['total']:,}", delta=int(deltas.get("total", 0)),
+        help="All alert events across all areas for the selected time range. Delta = change vs the same-length period immediately before.",
+    )
+    col2.metric(
+        "Sirens / Alerts", f"{kpi['sirens']:,}", delta=int(deltas.get("sirens", 0)),
+        help="Active-threat sirens (rockets, missiles, aircraft, infiltration, etc.). Delta = change vs the previous period.",
+    )
+    col3.metric(
+        "Pre-Alerts", f"{kpi['pre_alerts']:,}", delta=int(deltas.get("pre_alerts", 0)),
+        help="Early-warning notifications (category 14) issued before a potential siren. Delta = change vs the previous period.",
+    )
+    col4.metric(
+        "All-Clear Sent", f"{kpi['all_clear']:,}", delta=int(deltas.get("all_clear", 0)),
+        help="All-clear / relax notifications (category 13) indicating the immediate threat has passed. Delta = change vs the previous period.",
+    )
+    col5.metric(
+        "Unique Locations", f"{kpi['unique_locations']:,}",
+        help="Number of distinct cities / zones that received at least one alert in the selected time range.",
+    )
 
     st.caption(
         f"Showing **{kpi['total']:,}** events from **{start_date}** to **{end_date}** (all areas)  |  "
