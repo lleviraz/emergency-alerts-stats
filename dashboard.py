@@ -81,20 +81,6 @@ for _key, _default in [
     if _key not in st.session_state:
         st.session_state[_key] = _default
 
-# ── Auto-retranslate whenever Hebrew characters remain in location_en ──────────
-# Directly inspects the loaded DataFrame for Hebrew Unicode (U+05D0–U+05EA).
-# This is more reliable than a version-counter approach: it fires regardless of
-# Python module-cache state, and stops as soon as all names are translated.
-_HEBREW_RE = r"[\u05D0-\u05EA]"
-if st.session_state["df"] is not None:
-    _df_check = st.session_state["df"]
-    if "location_en" in _df_check.columns and _df_check["location_en"].str.contains(
-        _HEBREW_RE, na=False
-    ).any():
-        with st.spinner("Applying updated location translations…"):
-            st.session_state["df"] = apply_english_locations(_df_check)
-        st.rerun()
-
 # ── Apply pending area selection BEFORE any widget is instantiated ────────────
 # Buttons cannot write to a widget key after it has rendered, so we stage the
 # desired area in "pending_area" and copy it into "area_select" here, at the

@@ -51,28 +51,6 @@ def apply_english_labels(df: pd.DataFrame) -> pd.DataFrame:
 # ── Location helpers ─────────────────────────────────────────────────────────
 
 _TRAILING_DIGITS = re.compile(r"\s+\d+$")
-_HEB_CHARS = re.compile(r"[\u05D0-\u05EA]")
-
-# Consonantal transliteration table (vowel points are stripped automatically
-# since they sit outside the \u05D0-\u05EA block).
-_HEB_TO_LATIN: dict[str, str] = {
-    "א": "", "ב": "b", "ג": "g", "ד": "d", "ה": "h",
-    "ו": "v", "ז": "z", "ח": "ch", "ט": "t", "י": "y",
-    "כ": "k", "ך": "k", "ל": "l", "מ": "m", "ם": "m",
-    "נ": "n", "ן": "n", "ס": "s", "ע": "", "פ": "p",
-    "ף": "f", "צ": "tz", "ץ": "tz", "ק": "k", "ר": "r",
-    "ש": "sh", "ת": "t",
-}
-
-
-def _transliterate(text: str) -> str:
-    """Best-effort consonantal transliteration of Hebrew → Latin."""
-    out = []
-    for ch in text:
-        out.append(_HEB_TO_LATIN.get(ch, ch))
-    result = "".join(out).strip()
-    # Title-case each word and collapse whitespace
-    return " ".join(w.capitalize() for w in result.split())
 
 
 def _translate_location(name: str) -> str:
@@ -90,9 +68,7 @@ def _translate_location(name: str) -> str:
         base = stripped.split(" - ")[0]
         if base in LOCATION_MAP:
             return LOCATION_MAP[base] + " area"
-    # 4. Transliterate any remaining Hebrew characters rather than showing script
-    if _HEB_CHARS.search(name):
-        return _transliterate(name)
+    # 4. Fall back to Hebrew text
     return name
 
 
@@ -286,25 +262,17 @@ def hourly_heatmap_data(df: pd.DataFrame) -> pd.DataFrame:
 # ── Area helpers ─────────────────────────────────────────────────────────────
 
 def get_all_locations(df: pd.DataFrame) -> list[str]:
-    """Return a sorted list of all unique English location names in the dataset.
-
-    Filters out:
-    - Empty / whitespace-only strings
-    - Names shorter than 3 characters (sector codes like "ב", "יב", etc.)
-    - Names that don't start with a letter (garbled transliterations like "'g'r")
-    """
-    locs = (
+    """Return a sorted list of all unique English location names in the dataset."""
+    return sorted(
         df["location_en"]
         .dropna()
         .str.split(", ")
         .explode()
         .str.strip()
-        .loc[lambda s: s.str.len() >= 3]
-        .loc[lambda s: s.str[0].str.isalpha()]
+        .loc[lambda s: s != ""]
         .unique()
         .tolist()
     )
-    return sorted(locs)
 
 
 def filter_by_location(df: pd.DataFrame, location_en: str) -> pd.DataFrame:
