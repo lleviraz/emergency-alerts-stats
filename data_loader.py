@@ -7,6 +7,7 @@ On startup the app checks for a local cache file and loads it automatically.
 
 import io
 import os
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -18,6 +19,7 @@ DATA_URL = (
     "https://raw.githubusercontent.com/dleshem/israel-alerts-data/main/israel-alerts.csv"
 )
 LOCAL_CACHE_PATH = Path("israel-alerts.csv")
+_write_lock = threading.Lock()
 
 
 # ── Local cache ───────────────────────────────────────────────────────────────
@@ -41,8 +43,9 @@ def load_from_local() -> bytes | None:
 
 
 def _save_to_local(csv_bytes: bytes) -> None:
-    """Persist downloaded bytes to the local cache file."""
-    LOCAL_CACHE_PATH.write_bytes(csv_bytes)
+    """Persist downloaded bytes to the local cache file (thread-safe)."""
+    with _write_lock:
+        LOCAL_CACHE_PATH.write_bytes(csv_bytes)
 
 
 # ── Remote download ───────────────────────────────────────────────────────────

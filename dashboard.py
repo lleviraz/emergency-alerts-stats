@@ -475,7 +475,7 @@ with tab_area:
 
                 if model_ready and predicted is not None:
                     st.error(
-                        f"### ⚠️ Pre-Alert Detected — {selected_area}\n\n"
+                        f"### ⚠️ Pre-Alert Reported — {selected_area}\n\n"
                         f"**Estimated time to siren: {predicted:.1f} min**  "
                         f"· CI [{ms['historical_min_min']:.1f} – {ms['historical_max_min']:.1f}] min  \n"
                         f"Mean {ms['historical_avg_min']:.1f} ± {ms['historical_std_min']:.1f} min  "
