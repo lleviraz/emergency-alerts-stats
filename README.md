@@ -22,33 +22,49 @@ streamlit run dashboard.py
 
 Opens at **http://localhost:8501**
 
-## Local network access (same Wi-Fi)
+## Network setup (share on Wi-Fi)
 
-The app binds to `0.0.0.0` so anyone on your Wi-Fi can open it.
+The app binds to `0.0.0.0`, so anyone on the same Wi-Fi can reach it. Three things need to be in order:
 
-1. Find your machine's local IP:
-   ```
-   ipconfig
-   ```
-   Look for **IPv4 Address** under your Wi-Fi adapter (e.g. `192.168.1.233`).
+### 1. Windows network profile — most important
 
-2. Allow inbound connections on port 8501 through Windows Firewall — run **once** in PowerShell as Administrator:
-   ```powershell
-   netsh advfirewall firewall add rule name="Streamlit" dir=in action=allow protocol=TCP localport=8501
-   ```
+When Windows first connects to a network it asks whether it's *Public* or *Private*. **Public** blocks all inbound LAN traffic regardless of firewall rules.
 
-3. Share the URL with anyone on the same Wi-Fi:
-   ```
-   http://192.168.1.233:8501
-   ```
-   Replace `192.168.1.233` with your actual IP.
+To check / change:
+- **Settings → Network & Internet → Wi-Fi → your network name → Properties**
+- Set **Network profile type** to **Private**
 
-> **Note:** this is local-network only. Your home router's NAT blocks all access from the internet — no extra configuration needed to keep it private.
+This is the most common reason phones and other devices can't reach the app.
 
-To remove the firewall rule later:
+### 2. Find your local IP
+
+```
+ipconfig
+```
+
+Look for **IPv4 Address** under your Wi-Fi adapter — e.g. `192.168.1.233`. Share this address with others on the same network:
+
+```
+http://192.168.1.233:8501
+```
+
+Your router assigns this via DHCP so it may change after a reboot. To make it permanent, log into your router (`http://192.168.1.1`) and assign a static/reserved IP for your machine's MAC address.
+
+### 3. Windows Firewall rule (if still blocked)
+
+If the network profile is set to Private and it's still unreachable, add a firewall rule. Run **once** in PowerShell as Administrator:
+
+```powershell
+netsh advfirewall firewall add rule name="Streamlit" dir=in action=allow protocol=TCP localport=8501
+```
+
+To remove it later:
+
 ```powershell
 netsh advfirewall firewall delete rule name="Streamlit"
 ```
+
+> **Privacy note:** your home router's NAT means this is local-network only. Nobody on the internet can reach port 8501 on your machine unless you explicitly configure port forwarding — which you should not do.
 
 ## First use
 
