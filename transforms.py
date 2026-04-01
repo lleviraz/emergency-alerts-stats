@@ -286,17 +286,25 @@ def hourly_heatmap_data(df: pd.DataFrame) -> pd.DataFrame:
 # ── Area helpers ─────────────────────────────────────────────────────────────
 
 def get_all_locations(df: pd.DataFrame) -> list[str]:
-    """Return a sorted list of all unique English location names in the dataset."""
-    return sorted(
+    """Return a sorted list of all unique English location names in the dataset.
+
+    Filters out:
+    - Empty / whitespace-only strings
+    - Names shorter than 3 characters (sector codes like "ב", "יב", etc.)
+    - Names that don't start with a letter (garbled transliterations like "'g'r")
+    """
+    locs = (
         df["location_en"]
         .dropna()
         .str.split(", ")
         .explode()
         .str.strip()
-        .loc[lambda s: s != ""]
+        .loc[lambda s: s.str.len() >= 3]
+        .loc[lambda s: s.str[0].str.isalpha()]
         .unique()
         .tolist()
     )
+    return sorted(locs)
 
 
 def filter_by_location(df: pd.DataFrame, location_en: str) -> pd.DataFrame:

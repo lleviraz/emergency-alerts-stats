@@ -77,9 +77,25 @@ for _key, _default in [
     ("area_model_cache", {}),
     ("recent_areas", []),
     ("pending_area", None),
+    ("location_map_version", None),
 ]:
     if _key not in st.session_state:
         st.session_state[_key] = _default
+
+# ── Auto-retranslate if location_map.py was updated since data was loaded ─────
+# Uses entry count as a lightweight version proxy. When the map grows (new
+# translations added), the loaded DataFrame's location_en column is rebuilt
+# silently without requiring a full data reload.
+from location_map import LOCATION_MAP as _LMAP  # noqa: E402
+_MAP_VERSION = len(_LMAP)
+if (
+    st.session_state["df"] is not None
+    and st.session_state["location_map_version"] != _MAP_VERSION
+):
+    with st.spinner("Applying updated location translations…"):
+        st.session_state["df"] = apply_english_locations(st.session_state["df"])
+    st.session_state["location_map_version"] = _MAP_VERSION
+    st.rerun()
 
 # ── Apply pending area selection BEFORE any widget is instantiated ────────────
 # Buttons cannot write to a widget key after it has rendered, so we stage the
@@ -98,6 +114,7 @@ if st.session_state["df"] is None:
             _raw = apply_english_labels(_raw)
             _raw = apply_english_locations(_raw)
         st.session_state["df"] = _raw
+        st.session_state["location_map_version"] = _MAP_VERSION
         _, _mtime = local_cache_info()
         st.session_state["loaded_at"] = _mtime
         st.rerun()
@@ -122,6 +139,7 @@ with st.sidebar:
             raw = apply_english_locations(raw)
             st.session_state["df"] = raw
             st.session_state["loaded_at"] = datetime.now()
+            st.session_state["location_map_version"] = _MAP_VERSION
             progress_bar.empty()
             status_text.empty()
             st.rerun()
