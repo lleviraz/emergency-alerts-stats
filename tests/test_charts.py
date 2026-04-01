@@ -184,3 +184,49 @@ class TestInteractiveRiskWindowsChart:
         fig = charts.interactive_risk_windows_chart(df)
         _assert_figure(fig)
         assert len(fig.data) == 21
+
+
+class TestComparisonCharts:
+    def _make_conv_df(self, n=10):
+        dates = pd.date_range("2024-01-01", periods=n, freq="D")
+        return pd.DataFrame({
+            "date": dates,
+            "convergence_rate": [0.5] * n,
+            "n_pre_alerts": [2] * n,
+        })
+
+    def test_comparison_convergence_chart_two_areas(self):
+        conv_data = {
+            "Area A": self._make_conv_df(),
+            "Area B": self._make_conv_df(),
+        }
+        fig = charts.comparison_convergence_chart(conv_data)
+        _assert_figure(fig)
+        # 2 areas × 2 traces each (raw dots + rolling line)
+        assert len(fig.data) == 4
+
+    def test_comparison_convergence_chart_five_areas(self):
+        conv_data = {f"Area {c}": self._make_conv_df() for c in "ABCDE"}
+        fig = charts.comparison_convergence_chart(conv_data)
+        _assert_figure(fig)
+        assert len(fig.data) == 10
+
+    def test_comparison_convergence_chart_empty_data(self):
+        empty = pd.DataFrame(columns=["date", "convergence_rate", "n_pre_alerts"])
+        fig = charts.comparison_convergence_chart({"Area A": empty, "Area B": empty})
+        _assert_figure(fig)  # returns _empty_figure, still a Figure
+
+    def test_comparison_summary_chart_basic(self):
+        summary_df = pd.DataFrame([
+            {"area": "Area A", "metric": "Convergence %", "value": 60},
+            {"area": "Area A", "metric": "Avg Pre→Siren (min)", "value": 4.5},
+            {"area": "Area B", "metric": "Convergence %", "value": 40},
+            {"area": "Area B", "metric": "Avg Pre→Siren (min)", "value": 7.2},
+        ])
+        fig = charts.comparison_summary_chart(summary_df)
+        _assert_figure(fig)
+        assert len(fig.data) == 2  # one bar group per area
+
+    def test_comparison_summary_chart_empty(self):
+        fig = charts.comparison_summary_chart(pd.DataFrame())
+        _assert_figure(fig)

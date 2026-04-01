@@ -11,6 +11,8 @@ import streamlit.components.v1 as components
 
 from charts import (
     category_breakdown_chart,
+    comparison_convergence_chart,
+    comparison_summary_chart,
     convergence_rate_chart,
     daily_pre_alert_siren_chart,
     high_risk_windows_chart,
@@ -379,7 +381,7 @@ if df.empty:
     st.stop()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_area, tab_overview = st.tabs(["📍 Area Analysis", "📊 Overview"])
+tab_area, tab_overview, tab_compare = st.tabs(["📍 Area Analysis", "📊 Overview", "⚖️ Compare Areas"])
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 1 — Area Analysis
@@ -733,4 +735,87 @@ with tab_overview:
             data=csv_bytes_dl,
             file_name=f"israel_alerts_{start_date}_{end_date}.csv",
             mime="text/csv",
+        )
+
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 3 — Compare Areas
+# ════════════════════════════════════════════════════════════════════════════
+with tab_compare:
+    st.subheader("Compare Areas")
+    st.caption(
+        "Select 2–5 areas to compare their summary statistics and convergence "
+        "rate over time. The convergence chart respects the time-range slider."
+    )
+
+    all_locations_cmp = get_all_locations(df_full)
+
+    # Default: pre-fill with current area + first recent area (if any)
+    _cmp_defaults = []
+    if area_active:
+        _cmp_defaults.append(selected_area)
+    for _r in st.session_state["recent_areas"]:
+        if _r not in _cmp_defaults:
+            _cmp_defaults.append(_r)
+        if len(_cmp_defaults) >= 2:
+            break
+
+    compare_areas = st.multiselect(
+        "Choose areas to compare (2–5)",
+        options=all_locations_cmp,
+        default=[a for a in _cmp_defaults if a in all_locations_cmp],
+        max_selections=5,
+        key="compare_areas_select",
+    )
+
+    if len(compare_areas) < 2:
+        st.info("Select at least **2 areas** to see the comparison.")
+    else:
+        # ── Summary statistics table ─────────────────────────────────────────
+        st.subheader("Summary Statistics (full dataset)")
+        with st.spinner("Computing statistics…"):
+            rows = []
+            for area in compare_areas:
+                t = area_timings(df_history, area, window_minutes=15)
+                rows.append(
+                    {
+                        "Area": area,
+                        "Pre-Alerts": t["n_pre_alerts"],
+                        "Sirens": t["n_sirens"],
+                        "Avg Pre→Siren (min)": (
+                            round(t["avg_pre_to_siren_min"], 1)
+                            if t["avg_pre_to_siren_min"] is not None
+                            else None
+                        ),
+                        "Avg Pre→Clear (min)": (
+                            round(t["avg_pre_to_clear_min"], 1)
+                            if t["avg_pre_to_clear_min"] is not None
+                            else None
+                        ),
+                        "Convergence %": (
+                            round(t["convergence_rate"] * 100, 1)
+                            if t["convergence_rate"] is not None
+                            else None
+                        ),
+                    }
+                )
+            summary_df = pd.DataFrame(rows).set_index("Area")
+
+        st.dataframe(summary_df, width="stretch", key="compare_summary_table")
+
+        st.divider()
+
+        # ── Convergence rate comparison chart ────────────────────────────────
+        st.subheader("Convergence Rate Over Time")
+        st.caption(
+            "7-day rolling average per area. Affected by the time-range slider in the sidebar."
+        )
+        with st.spinner("Computing convergence timelines…"):
+            conv_data = {}
+            for area in compare_areas:
+                conv_data[area] = convergence_rate_over_time(df, area, window_minutes=15)
+
+        st.plotly_chart(
+            comparison_convergence_chart(conv_data),
+            width="stretch",
+            key="compare_conv_chart",
         )

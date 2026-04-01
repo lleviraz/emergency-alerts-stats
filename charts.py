@@ -494,6 +494,100 @@ def daily_pre_alert_siren_chart(daily_df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def comparison_convergence_chart(conv_data: dict) -> go.Figure:
+    """
+    Multi-line 7-day rolling convergence rate chart for 2-5 areas.
+    conv_data: {area_name: DataFrame(date, convergence_rate)}
+    """
+    COLORS = ["#e63946", "#2dc653", "#ffd166", "#a8dadc", "#f4a261"]
+    fig = go.Figure()
+
+    for i, (area, df) in enumerate(conv_data.items()):
+        if df.empty:
+            continue
+        rolling = (
+            df.set_index("date")["convergence_rate"]
+            .rolling(7, min_periods=1)
+            .mean()
+            .reset_index()
+        )
+        # Raw dots (faint)
+        fig.add_trace(
+            go.Scatter(
+                x=df["date"],
+                y=df["convergence_rate"] * 100,
+                mode="markers",
+                marker=dict(color=COLORS[i % len(COLORS)], size=4, opacity=0.25),
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+        # 7-day rolling line
+        fig.add_trace(
+            go.Scatter(
+                x=rolling["date"],
+                y=rolling["convergence_rate"] * 100,
+                mode="lines",
+                name=area,
+                line=dict(color=COLORS[i % len(COLORS)], width=2),
+                hovertemplate=f"<b>{area}</b><br>%{{x}}<br>%{{y:.1f}}%<extra></extra>",
+            )
+        )
+
+    if not fig.data:
+        return _empty_figure("No convergence data for selected areas")
+
+    fig.update_layout(
+        title="Convergence Rate Comparison — 7-day rolling average",
+        xaxis_title="Date",
+        yaxis_title="% Pre-Alerts → Siren",
+        yaxis=dict(range=[0, 105]),
+        template=_PLOTLY_TEMPLATE,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified",
+        margin=dict(l=60, r=20, t=80, b=40),
+    )
+    return fig
+
+
+def comparison_summary_chart(summary_df: pd.DataFrame) -> go.Figure:
+    """
+    Grouped horizontal bar chart comparing key metrics across areas.
+    summary_df columns: area, metric, value.
+    """
+    if summary_df.empty:
+        return _empty_figure("No data")
+
+    metrics = summary_df["metric"].unique().tolist()
+    areas = summary_df["area"].unique().tolist()
+    COLORS = ["#e63946", "#2dc653", "#ffd166", "#a8dadc", "#f4a261"]
+
+    fig = go.Figure()
+    for i, area in enumerate(areas):
+        sub = summary_df[summary_df["area"] == area]
+        fig.add_trace(
+            go.Bar(
+                y=sub["metric"],
+                x=sub["value"],
+                name=area,
+                orientation="h",
+                marker_color=COLORS[i % len(COLORS)],
+            )
+        )
+
+    fig.update_layout(
+        title="Summary Statistics by Area",
+        xaxis_title="Value",
+        yaxis_title=None,
+        barmode="group",
+        template=_PLOTLY_TEMPLATE,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=200, r=40, t=80, b=40),
+        height=max(300, len(metrics) * 60),
+    )
+    return fig
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _empty_figure(message: str) -> go.Figure:
