@@ -482,10 +482,26 @@ with tab_area:
                         f"· Median {ms['historical_median_min']:.1f} min  "
                         f"· {ms['n_samples']} training events"
                     )
-                    st.plotly_chart(
-                        prediction_distribution_chart(ms, predicted),
-                        width="stretch",
-                        key="pred_dist",
+
+            # ── Distribution chart — always visible when model is trained ───
+            if model_ready:
+                # During an active event use the live prediction; otherwise
+                # fall back to the historical mean so the chart is always useful.
+                _chart_predicted = (
+                    st.session_state.get("last_prediction") or ms["historical_avg_min"]
+                    if alert_active_now
+                    else ms["historical_avg_min"]
+                )
+                st.plotly_chart(
+                    prediction_distribution_chart(ms, _chart_predicted),
+                    width="stretch",
+                    key="pred_dist",
+                )
+                if not alert_active_now:
+                    st.caption(
+                        "Historical pre-alert → siren time distribution for this area.  "
+                        "Red line = historical mean. Press **🚨 Pre-alert now...** for a "
+                        "time-adjusted prediction."
                     )
 
             st.divider()
