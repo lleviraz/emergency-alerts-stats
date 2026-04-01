@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from charts import (
     category_breakdown_chart,
@@ -45,9 +46,11 @@ from transforms import (
     kpi_delta,
     kpi_summary,
     monthly_counts,
+    predict_siren_probability,
     predict_time_to_siren_now,
     top_locations,
     train_area_model,
+    train_siren_classifier,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -59,7 +62,16 @@ st.set_page_config(
 )
 
 # ── Session state init ────────────────────────────────────────────────────────
-for _key, _default in [("df", None), ("loaded_at", None), ("model_state", None)]:
+for _key, _default in [
+    ("df", None),
+    ("loaded_at", None),
+    ("model_state", None),
+    ("classifier_state", None),
+    ("alert_active", False),
+    ("alert_started_at", None),
+    ("last_prediction", None),
+    ("last_p_siren", None),
+]:
     if _key not in st.session_state:
         st.session_state[_key] = _default
 
@@ -176,21 +188,29 @@ with st.sidebar:
         area_active_sidebar = selected_area != "(All areas)"
 
         ms = st.session_state["model_state"]
+        cs = st.session_state["classifier_state"]
         if ms:
             trained_for = ms["location"]
             stale = trained_for != selected_area
-            status_icon = "⚠️" if stale else "✅"
+            icon = "⚠️" if stale else "✅"
             st.caption(
-                f"{status_icon} Model: **{trained_for}**  \n"
-                f"Trained at {ms['trained_at']} · {ms['n_samples']} samples"
+                f"{icon} Regression: **{trained_for}**  \n"
+                f"Trained {ms['trained_at']} · {ms['n_samples']} pairs · "
+                f"avg {ms['historical_avg_min']:.1f} min"
             )
+            if cs and cs.get("location") == trained_for:
+                clf_icon = "⚠️" if stale else "✅"
+                st.caption(
+                    f"{clf_icon} Classifier: base rate "
+                    f"**{cs['base_rate'] * 100:.0f}%** · {cs['n_samples']} pre-alerts"
+                )
             if stale:
                 st.caption("Area changed — retrain for accurate predictions.")
 
         train_label = (
-            f"🧠 Train model for {selected_area}"
+            f"🧠 Train models for {selected_area}"
             if area_active_sidebar
-            else "🧠 Train model  *(select an area first)*"
+            else "🧠 Train models  *(select an area first)*"
         )
         if st.button(train_label, use_container_width=True, disabled=not area_active_sidebar):
             df_history_train = filter_categories(
@@ -199,19 +219,29 @@ with st.sidebar:
             df_history_area_train = filter_by_location(df_history_train, selected_area)
             _pbar = st.progress(0.0, text="Starting…")
 
-            def _train_progress(fraction: float, text: str) -> None:
-                _pbar.progress(fraction, text=text)
+            def _reg_progress(fraction: float, text: str) -> None:
+                _pbar.progress(fraction * 0.5, text=f"Regression: {text}")
+
+            def _clf_progress(fraction: float, text: str) -> None:
+                _pbar.progress(0.5 + fraction * 0.5, text=f"Classifier: {text}")
 
             model_state, err = train_area_model(
-                df_history_area_train, selected_area, progress_cb=_train_progress
+                df_history_area_train, selected_area, progress_cb=_reg_progress
+            )
+            classifier_state, clf_err = train_siren_classifier(
+                df_history_area_train, selected_area, progress_cb=_clf_progress
             )
             _pbar.empty()
             if err:
                 st.warning(err)
             else:
                 st.session_state["model_state"] = model_state
+                if clf_err:
+                    st.warning(clf_err)
+                else:
+                    st.session_state["classifier_state"] = classifier_state
                 st.success(
-                    f"Model ready · {model_state['n_samples']} paired events · "
+                    f"Models ready · {model_state['n_samples']} pairs · "
                     f"avg {model_state['historical_avg_min']:.1f} min"
                 )
                 st.rerun()
@@ -295,37 +325,104 @@ with tab_area:
         if df_area.empty:
             st.warning(f"No events found for **{selected_area}** in the selected time range.")
         else:
-            # ── Pre-alert now button (inference only) ───────────────────────
+            # ── Pre-alert now button ────────────────────────────────────────
             ms = st.session_state["model_state"]
+            cs = st.session_state["classifier_state"]
             model_ready = ms is not None and ms.get("location") == selected_area
+            classifier_ready = cs is not None and cs.get("location") == selected_area
+            alert_active_now = st.session_state["alert_active"]
 
-            if st.button("🚨 Pre-alert now...", type="primary", use_container_width=True):
+            if not alert_active_now:
+                if st.button("🚨 Pre-alert now...", type="primary", use_container_width=True):
+                    if not model_ready:
+                        st.warning(
+                            "No trained model for this area yet. "
+                            "Click **🧠 Train models** in the sidebar first."
+                        )
+                    else:
+                        predicted = predict_time_to_siren_now(ms)
+                        p_siren = predict_siren_probability(cs) if classifier_ready else None
+                        st.session_state["last_prediction"] = predicted
+                        st.session_state["last_p_siren"] = p_siren
+                        st.session_state["alert_active"] = True
+                        st.session_state["alert_started_at"] = datetime.now()
+                        st.rerun()
                 if not model_ready:
-                    st.warning(
-                        "No trained model for this area yet. "
-                        "Click **🧠 Train model** in the sidebar first."
-                    )
-                else:
-                    predicted = predict_time_to_siren_now(ms)
-                    st.session_state["last_prediction"] = predicted
+                    st.caption("⚠️ Train the models in the sidebar for predictions.")
+            else:
+                if st.button("✅ Click to mark the end of the event", type="secondary", use_container_width=True):
+                    st.session_state["alert_active"] = False
+                    st.session_state["alert_started_at"] = None
+                    st.rerun()
 
-            if model_ready and "last_prediction" in st.session_state:
-                predicted = st.session_state["last_prediction"]
-                st.error(
-                    f"### ⚠️ Pre-Alert Detected — {selected_area}\n\n"
-                    f"**Estimated time to siren: {predicted:.1f} min**  "
-                    f"· CI [{ms['historical_min_min']:.1f} – {ms['historical_max_min']:.1f}] min  \n"
-                    f"Mean {ms['historical_avg_min']:.1f} ± {ms['historical_std_min']:.1f} min  "
-                    f"· Median {ms['historical_median_min']:.1f} min  "
-                    f"· {ms['n_samples']} training events"
-                )
-                st.plotly_chart(
-                    prediction_distribution_chart(ms, predicted),
-                    width="stretch",
-                    key="pred_dist",
-                )
-            elif not model_ready:
-                st.caption("⚠️ Train the model in the sidebar for siren-time predictions.")
+                started_at = st.session_state["alert_started_at"]
+                predicted = st.session_state.get("last_prediction", 5.0)
+                p_siren = st.session_state.get("last_p_siren")
+
+                # Live countdown timer (JS-driven, updates every 500 ms in browser)
+                if started_at is not None:
+                    start_ms = int(started_at.timestamp() * 1000)
+                    pred_ms = int(predicted * 60 * 1000)
+                    p_siren_html = ""
+                    if p_siren is not None:
+                        pct = f"{p_siren * 100:.0f}%"
+                        clr = "#e63946" if p_siren > 0.7 else "#f4a261" if p_siren > 0.4 else "#2dc653"
+                        p_siren_html = (
+                            f" &nbsp;·&nbsp; P(siren): "
+                            f'<span style="color:{clr};font-weight:bold;font-size:1.1em">{pct}</span>'
+                        )
+                    timer_html = f"""
+                    <div style="font-family:monospace;text-align:center;padding:16px;
+                                border-radius:12px;border:1px solid #444;background:#0e1117;">
+                      <div style="font-size:1em;color:#aaa;margin-bottom:8px;
+                                  text-transform:uppercase;letter-spacing:2px;">
+                        Time since pre-alert{p_siren_html}
+                      </div>
+                      <div id="tmr" style="font-size:5em;font-weight:bold;padding:12px 32px;
+                           border-radius:10px;display:inline-block;min-width:200px;
+                           transition:background-color 0.8s ease;color:#fff;">0:00</div>
+                      <div style="margin-top:10px;color:#aaa;font-size:1em;">
+                        Predicted: <span style="color:#ffd166;font-weight:bold">{predicted:.1f} min</span>
+                      </div>
+                    </div>
+                    <script>
+                      (function(){{
+                        var startMs={start_ms}, predMs={pred_ms};
+                        var el=document.getElementById('tmr');
+                        function clr(e){{
+                          var r=e/predMs;
+                          if(r<0.5)  return '#2dc653';
+                          if(r<0.8)  return '#ffd166';
+                          if(r<1.0)  return '#f4a261';
+                          if(r<1.35) return '#e63946';
+                          return '#ffd166';
+                        }}
+                        function tick(){{
+                          var e=Date.now()-startMs;
+                          var s=Math.floor(e/1000);
+                          el.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+                          el.style.backgroundColor=clr(e);
+                        }}
+                        tick(); setInterval(tick,500);
+                      }})();
+                    </script>
+                    """
+                    components.html(timer_html, height=200)
+
+                if model_ready and predicted is not None:
+                    st.error(
+                        f"### ⚠️ Pre-Alert Detected — {selected_area}\n\n"
+                        f"**Estimated time to siren: {predicted:.1f} min**  "
+                        f"· CI [{ms['historical_min_min']:.1f} – {ms['historical_max_min']:.1f}] min  \n"
+                        f"Mean {ms['historical_avg_min']:.1f} ± {ms['historical_std_min']:.1f} min  "
+                        f"· Median {ms['historical_median_min']:.1f} min  "
+                        f"· {ms['n_samples']} training events"
+                    )
+                    st.plotly_chart(
+                        prediction_distribution_chart(ms, predicted),
+                        width="stretch",
+                        key="pred_dist",
+                    )
 
             st.divider()
 

@@ -543,3 +543,84 @@ def predict_time_to_siren_now(model_state: dict) -> float:
     X = np.array([_make_features(now.hour, now.dayofweek)])
     raw = float(model_state["model"].predict(X)[0])
     return float(np.clip(raw, 0.3, model_state["window_minutes"]))
+
+
+def train_siren_classifier(
+    df: pd.DataFrame,
+    location_en: str,
+    window_minutes: int = 15,
+    progress_cb=None,
+) -> tuple:
+    """
+    Train a logistic regression classifier to predict P(siren | pre-alert in area).
+
+    progress_cb(fraction: float, text: str) is called at key stages if provided.
+    Returns (classifier_state_dict, error_str).
+    classifier_state_dict is None when there is insufficient training data.
+    """
+    import numpy as np
+    from sklearn.linear_model import LogisticRegression
+
+    def _cb(f, t):
+        if progress_cb:
+            progress_cb(f, t)
+
+    _cb(0.05, "Filtering area data…")
+    area_df = filter_by_location(df, location_en).sort_values("parsed_alertDate")
+
+    _cb(0.15, "Identifying pre-alerts & sirens…")
+    pre_alerts = area_df[area_df["category"].isin(PRE_ALERT_CATEGORIES)].reset_index(drop=True)
+    sirens = area_df[area_df["category"].isin(SIREN_CATEGORIES)].reset_index(drop=True)
+
+    window = pd.Timedelta(minutes=window_minutes)
+    X: list[list[float]] = []
+    y: list[int] = []
+    n_pre = len(pre_alerts)
+
+    for i, (_, pre) in enumerate(pre_alerts.iterrows()):
+        if n_pre > 0:
+            _cb(0.20 + 0.65 * (i / n_pre), f"Building events… {i}/{n_pre}")
+        t = pre["parsed_alertDate"]
+        if pd.isnull(t):
+            continue
+        followed_by_siren = not sirens[
+            (sirens["parsed_alertDate"] > t) & (sirens["parsed_alertDate"] <= t + window)
+        ].empty
+        X.append(_make_features(t.hour, t.dayofweek))
+        y.append(int(followed_by_siren))
+
+    n = len(X)
+    n_pos = sum(y)
+
+    if n < 10 or n_pos < 2 or (n - n_pos) < 2:
+        _cb(1.0, "Insufficient data")
+        return None, (
+            f"Classifier: only {n} pre-alerts, {n_pos} with siren. "
+            "Need ≥10 events with both outcomes."
+        )
+
+    _cb(0.90, "Fitting logistic regression…")
+    clf = LogisticRegression(max_iter=200)
+    clf.fit(np.array(X), np.array(y))
+    _cb(1.0, "Complete")
+
+    return {
+        "model": clf,
+        "location": location_en,
+        "n_samples": n,
+        "n_with_siren": n_pos,
+        "base_rate": float(n_pos / n),
+        "trained_at": pd.Timestamp.now().strftime("%H:%M:%S"),
+    }, None
+
+
+def predict_siren_probability(classifier_state: dict) -> float:
+    """
+    Predict P(siren | pre-alert now) for the current hour and day of week.
+    Returns probability in [0, 1].
+    """
+    import numpy as np
+
+    now = pd.Timestamp.now()
+    X = np.array([_make_features(now.hour, now.dayofweek)])
+    return float(classifier_state["model"].predict_proba(X)[0][1])
