@@ -51,6 +51,28 @@ def apply_english_labels(df: pd.DataFrame) -> pd.DataFrame:
 # ── Location helpers ─────────────────────────────────────────────────────────
 
 _TRAILING_DIGITS = re.compile(r"\s+\d+$")
+_HEB_CHARS = re.compile(r"[\u05D0-\u05EA]")
+
+# Consonantal transliteration table (vowel points are stripped automatically
+# since they sit outside the \u05D0-\u05EA block).
+_HEB_TO_LATIN: dict[str, str] = {
+    "א": "", "ב": "b", "ג": "g", "ד": "d", "ה": "h",
+    "ו": "v", "ז": "z", "ח": "ch", "ט": "t", "י": "y",
+    "כ": "k", "ך": "k", "ל": "l", "מ": "m", "ם": "m",
+    "נ": "n", "ן": "n", "ס": "s", "ע": "", "פ": "p",
+    "ף": "f", "צ": "tz", "ץ": "tz", "ק": "k", "ר": "r",
+    "ש": "sh", "ת": "t",
+}
+
+
+def _transliterate(text: str) -> str:
+    """Best-effort consonantal transliteration of Hebrew → Latin."""
+    out = []
+    for ch in text:
+        out.append(_HEB_TO_LATIN.get(ch, ch))
+    result = "".join(out).strip()
+    # Title-case each word and collapse whitespace
+    return " ".join(w.capitalize() for w in result.split())
 
 
 def _translate_location(name: str) -> str:
@@ -68,7 +90,9 @@ def _translate_location(name: str) -> str:
         base = stripped.split(" - ")[0]
         if base in LOCATION_MAP:
             return LOCATION_MAP[base] + " area"
-    # 4. Fall back to Hebrew text
+    # 4. Transliterate any remaining Hebrew characters rather than showing script
+    if _HEB_CHARS.search(name):
+        return _transliterate(name)
     return name
 
 
