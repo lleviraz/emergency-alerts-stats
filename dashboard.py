@@ -72,6 +72,8 @@ for _key, _default in [
     ("last_prediction", None),
     ("last_p_siren", None),
     ("active_area", None),
+    ("area_model_cache", {}),
+    ("recent_areas", []),
 ]:
     if _key not in st.session_state:
         st.session_state[_key] = _default
@@ -180,7 +182,19 @@ with st.sidebar:
             "Focus on area",
             options=area_options,
             index=default_idx,
+            key="area_select",
         )
+
+        # ── Recent areas quick-select ────────────────────────────────────────
+        recents = [a for a in st.session_state["recent_areas"] if a != selected_area]
+        if recents:
+            st.caption("Recent areas:")
+            for _r in recents:
+                _has_model = _r in st.session_state["area_model_cache"]
+                _btn_label = f"{'🧠 ' if _has_model else ''}{_r}"
+                if st.button(_btn_label, key=f"recent_{_r}", use_container_width=True):
+                    st.session_state["area_select"] = _r
+                    st.rerun()
 
         st.divider()
 
@@ -241,6 +255,12 @@ with st.sidebar:
                     st.warning(clf_err)
                 else:
                     st.session_state["classifier_state"] = classifier_state
+                # Persist both models in the per-area cache
+                st.session_state["area_model_cache"][selected_area] = {
+                    "model_state": model_state,
+                    "classifier_state": None if clf_err else classifier_state,
+                    "loaded_at": st.session_state.get("loaded_at"),
+                }
                 st.success(
                     f"Models ready · {model_state['n_samples']} pairs · "
                     f"avg {model_state['historical_avg_min']:.1f} min"
@@ -291,12 +311,28 @@ if st.session_state["df"] is None:
 df_full = st.session_state["df"]
 area_active = selected_area != "(All areas)"
 
-# ── Auto-stop any running event when the area changes ─────────────────────────
+# ── Handle area change: stop event, update recents, restore cached model ──────
 if st.session_state["active_area"] != selected_area:
+    prev = st.session_state["active_area"]
+    # Push previous area into recent list (skip None / all-areas placeholder)
+    if prev and prev != "(All areas)":
+        recents = [prev] + [
+            a for a in st.session_state["recent_areas"]
+            if a != prev and a != selected_area
+        ]
+        st.session_state["recent_areas"] = recents[:3]
     st.session_state["active_area"] = selected_area
+    # Stop any running alert
     if st.session_state["alert_active"]:
         st.session_state["alert_active"] = False
         st.session_state["alert_started_at"] = None
+    # Restore cached models if data hasn't changed since they were trained
+    cache = st.session_state["area_model_cache"]
+    if selected_area in cache:
+        entry = cache[selected_area]
+        if entry.get("loaded_at") == st.session_state.get("loaded_at"):
+            st.session_state["model_state"] = entry["model_state"]
+            st.session_state["classifier_state"] = entry["classifier_state"]
 
 df = filter_by_date_range(df_full, start_date, end_date)
 df = filter_categories(df, include_drills=include_drills, selected_category_ids=selected_ids)
