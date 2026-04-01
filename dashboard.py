@@ -342,6 +342,17 @@ if st.session_state["active_area"] != selected_area:
         if entry.get("loaded_at") == st.session_state.get("loaded_at"):
             st.session_state["model_state"] = entry["model_state"]
             st.session_state["classifier_state"] = entry["classifier_state"]
+        else:
+            # Data was refreshed — cached model is stale, clear it
+            st.session_state["model_state"] = None
+            st.session_state["classifier_state"] = None
+    else:
+        # No model cached for this area yet — clear any leftover from previous area
+        st.session_state["model_state"] = None
+        st.session_state["classifier_state"] = None
+    # Rerun so the sidebar re-renders immediately with the correct model state.
+    # Safe: active_area is already updated above so this block won't fire again.
+    st.rerun()
 
 df = filter_by_date_range(df_full, start_date, end_date)
 df = filter_categories(df, include_drills=include_drills, selected_category_ids=selected_ids)
