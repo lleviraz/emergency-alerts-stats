@@ -236,7 +236,19 @@ with st.sidebar:
             if area_active_sidebar
             else "🧠 Train models  *(select an area first)*"
         )
-        if st.button(train_label, use_container_width=True, disabled=not area_active_sidebar):
+        # Light up as primary when the area needs training:
+        # no cache entry, or cached model was trained on different data.
+        _cache_entry = st.session_state["area_model_cache"].get(selected_area)
+        _needs_training = area_active_sidebar and (
+            _cache_entry is None
+            or _cache_entry.get("loaded_at") != st.session_state.get("loaded_at")
+        )
+        if st.button(
+            train_label,
+            use_container_width=True,
+            disabled=not area_active_sidebar,
+            type="primary" if _needs_training else "secondary",
+        ):
             df_history_train = filter_categories(
                 df_full, include_drills=False, selected_category_ids=None
             )
