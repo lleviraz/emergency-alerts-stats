@@ -15,6 +15,24 @@ COOLDOWN_MINUTES = 60   # must match dashboard.COOLDOWN_MINUTES
 AUTO_REFRESH_HOURS = 4  # must match dashboard.AUTO_REFRESH_HOURS
 
 
+def can_train(no_model: bool, is_local: bool, age_seconds: float | None) -> bool:
+    """
+    Replica of the _can_train expression in dashboard.py sidebar.
+
+    Always True when:
+      - session has no model for the current area (avoids the stuck-state bug)
+      - running in local dev mode
+      - area was never trained in this server run
+      - cooldown period has elapsed
+    """
+    return (
+        no_model
+        or is_local
+        or age_seconds is None
+        or age_seconds >= COOLDOWN_MINUTES * 60
+    )
+
+
 def can_refresh(no_data: bool, is_local: bool, age_seconds: float | None) -> bool:
     """
     Replica of the _can_refresh expression in dashboard.py sidebar.
@@ -98,6 +116,45 @@ class TestCanRefresh:
     def test_never_downloaded_always_enabled(self):
         """age_seconds=None means first ever run — must be enabled."""
         assert can_refresh(no_data=False, is_local=False, age_seconds=None) is True
+
+
+# ── can_train ─────────────────────────────────────────────────────────────────
+
+class TestCanTrain:
+    """
+    The train button must never trap a session that has no model.
+    Regression guard for the F5 / new-tab stuck-state bug on model training.
+    """
+
+    def test_no_model_always_enabled(self):
+        """Session with no model must be able to train regardless of cooldown."""
+        age = 5 * 60  # 5 min — well within cooldown
+        assert can_train(no_model=True, is_local=False, age_seconds=age) is True
+
+    def test_no_model_enabled_one_second_after_train(self):
+        assert can_train(no_model=True, is_local=False, age_seconds=1) is True
+
+    def test_no_model_enabled_at_zero_age(self):
+        assert can_train(no_model=True, is_local=False, age_seconds=0) is True
+
+    def test_local_mode_always_enabled_with_model(self):
+        age = 10 * 60
+        assert can_train(no_model=False, is_local=True, age_seconds=age) is True
+
+    def test_cloud_blocked_during_cooldown_when_model_exists(self):
+        age = 10 * 60
+        assert can_train(no_model=False, is_local=False, age_seconds=age) is False
+
+    def test_cloud_blocked_one_second_before_cooldown_ends(self):
+        age = COOLDOWN_MINUTES * 60 - 1
+        assert can_train(no_model=False, is_local=False, age_seconds=age) is False
+
+    def test_cloud_enabled_exactly_at_cooldown(self):
+        age = COOLDOWN_MINUTES * 60
+        assert can_train(no_model=False, is_local=False, age_seconds=age) is True
+
+    def test_never_trained_always_enabled(self):
+        assert can_train(no_model=False, is_local=False, age_seconds=None) is True
 
 
 # ── should_auto_refresh ───────────────────────────────────────────────────────

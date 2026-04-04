@@ -353,8 +353,14 @@ with st.sidebar:
             _train_age_s = (
                 (datetime.now() - _train_last).total_seconds() if _train_last else None
             )
+        # Always allow training when this session has no model yet (new tab / F5)
+        # — same guard as the data-refresh button to avoid the stuck-state bug.
+        _session_has_model = st.session_state["model_state"] is not None
         _can_train = area_active_sidebar and (
-            IS_LOCAL or _train_age_s is None or _train_age_s >= COOLDOWN_MINUTES * 60
+            not _session_has_model
+            or IS_LOCAL
+            or _train_age_s is None
+            or _train_age_s >= COOLDOWN_MINUTES * 60
         )
         _train_help = None
         if area_active_sidebar and not _can_train:
