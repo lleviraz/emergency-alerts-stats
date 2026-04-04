@@ -438,9 +438,12 @@ with st.sidebar:
 
 # ── Main area ─────────────────────────────────────────────────────────────────
 st.title("🚨 Israel Civil Defense Alerts Dashboard")
+_updated_str = ""
+if st.session_state.get("loaded_at"):
+    _updated_str = f" · Data updated: **{st.session_state['loaded_at'].strftime('%Y-%m-%d %H:%M')}**"
 st.caption(
     "Data source: [github.com/dleshem/israel-alerts-data]"
-    "(https://github.com/dleshem/israel-alerts-data)"
+    f"(https://github.com/dleshem/israel-alerts-data){_updated_str}"
 )
 
 if st.session_state["df"] is None:

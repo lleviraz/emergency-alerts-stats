@@ -306,3 +306,106 @@ class TestTrainSirenClassifier:
         assert err is None
         prob = T.predict_siren_probability(clf_state)
         assert 0.0 <= prob <= 1.0
+
+
+# ── area_timings (vectorised) ─────────────────────────────────────────────────
+
+class TestAreaTimings:
+    """
+    Verify the merge_asof-based area_timings produces correct values.
+    These also guard against regressions if the vectorisation is changed.
+    """
+
+    def test_all_pairs_match(self, paired_df):
+        """10 pre-alert/siren pairs 5 min apart → 100 % convergence, avg 5 min."""
+        t = T.area_timings(paired_df, AREA)
+        assert t["n_pre_alerts"] == 10
+        assert t["n_sirens"] == 10
+        assert t["n_converged"] == 10
+        assert t["convergence_rate"] == pytest.approx(1.0)
+        assert t["avg_pre_to_siren_min"] == pytest.approx(5.0)
+
+    def test_no_match_outside_window(self, no_match_df):
+        """Sirens 20 min after pre-alerts → 0 matches (window = 15 min)."""
+        t = T.area_timings(no_match_df, AREA)
+        assert t["n_converged"] == 0
+        assert t["convergence_rate"] == pytest.approx(0.0)
+        assert t["avg_pre_to_siren_min"] is None
+
+    def test_mixed_convergence_rate(self, mixed_df):
+        """8 matched + 4 unmatched → 8/12 convergence."""
+        t = T.area_timings(mixed_df, AREA)
+        assert t["n_pre_alerts"] == 12
+        assert t["n_converged"] == 8
+        assert t["convergence_rate"] == pytest.approx(8 / 12)
+
+    def test_unknown_area_returns_zeros(self, paired_df):
+        """Area not in data → all zeros / Nones, no error."""
+        t = T.area_timings(paired_df, "Nowhere")
+        assert t["n_pre_alerts"] == 0
+        assert t["n_sirens"] == 0
+        assert t["convergence_rate"] is None
+        assert t["avg_pre_to_siren_min"] is None
+
+    def test_no_sirens_in_area(self, base_time):
+        """Only pre-alerts, zero sirens → n_converged=0, avg_siren=None."""
+        rows = [_make_row(base_time + pd.Timedelta(hours=i), CAT_PRE_ALERT)
+                for i in range(5)]
+        df = pd.DataFrame(rows)
+        t = T.area_timings(df, AREA)
+        assert t["n_converged"] == 0
+        assert t["convergence_rate"] == pytest.approx(0.0)
+        assert t["avg_pre_to_siren_min"] is None
+
+    def test_returns_required_keys(self, paired_df):
+        keys = {"n_pre_alerts", "n_sirens", "avg_pre_to_siren_min",
+                "avg_pre_to_clear_min", "convergence_rate", "n_converged"}
+        assert keys == set(T.area_timings(paired_df, AREA).keys())
+
+
+# ── convergence_rate_over_time (vectorised) ───────────────────────────────────
+
+class TestConvergenceRateOverTime:
+    """Guard the vectorised convergence timeline against regressions."""
+
+    def test_all_pairs_full_convergence(self, paired_df):
+        """
+        10 pairs spaced 3 h apart starting at 10:00 → events span two calendar
+        days (day 1: pairs 0-4, day 2: pairs 5-9).  Every pre-alert is followed
+        by a siren within 5 min, so convergence_rate = 1.0 on every day.
+        """
+        result = T.convergence_rate_over_time(paired_df, AREA)
+        assert not result.empty
+        assert (result["convergence_rate"] == 1.0).all()
+        assert result["n_pre_alerts"].sum() == 10
+
+    def test_no_sirens_zero_convergence(self, base_time):
+        """Pre-alerts only → convergence_rate 0 on each day."""
+        rows = [_make_row(base_time + pd.Timedelta(hours=i), CAT_PRE_ALERT)
+                for i in range(3)]
+        df = pd.DataFrame(rows)
+        result = T.convergence_rate_over_time(df, AREA)
+        assert not result.empty
+        assert (result["convergence_rate"] == 0).all()
+
+    def test_empty_area_returns_empty_df(self, paired_df):
+        """Unknown area → empty DataFrame with correct columns."""
+        result = T.convergence_rate_over_time(paired_df, "Nowhere")
+        assert result.empty
+        assert list(result.columns) == ["date", "convergence_rate", "n_pre_alerts"]
+
+    def test_no_match_outside_window(self, no_match_df):
+        """Sirens outside window → convergence_rate 0 on all days."""
+        result = T.convergence_rate_over_time(no_match_df, AREA)
+        assert not result.empty
+        assert (result["convergence_rate"] == 0).all()
+
+    def test_mixed_df_partial_convergence(self, mixed_df):
+        """8 matched + 4 unmatched → mean convergence_rate < 1."""
+        result = T.convergence_rate_over_time(mixed_df, AREA)
+        overall = result["convergence_rate"].mean()
+        assert 0 < overall < 1
+
+    def test_output_columns(self, paired_df):
+        result = T.convergence_rate_over_time(paired_df, AREA)
+        assert set(result.columns) == {"date", "convergence_rate", "n_pre_alerts"}

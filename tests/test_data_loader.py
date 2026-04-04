@@ -90,22 +90,5 @@ class TestLoadDashboardDf:
         assert set(df["category"].tolist()) == {1, 14, 13}
 
 
-# ── local_cache_info ──────────────────────────────────────────────────────────
-
-class TestLocalCacheInfo:
-    def test_local_cache_info_missing(self, tmp_path):
-        """Returns (False, None) when the cache file does not exist."""
-        non_existent = tmp_path / "does_not_exist.csv"
-        with patch.object(data_loader, "LOCAL_CACHE_PATH", non_existent):
-            exists, mtime = data_loader.local_cache_info()
-        assert exists is False
-        assert mtime is None
-
-    def test_local_cache_info_present(self, tmp_path):
-        """Returns (True, datetime) when the cache file exists."""
-        cache_file = tmp_path / "israel-alerts.csv"
-        cache_file.write_bytes(b"date,alertDate,category,data\n")
-        with patch.object(data_loader, "LOCAL_CACHE_PATH", cache_file):
-            exists, mtime = data_loader.local_cache_info()
-        assert exists is True
-        assert mtime is not None
+# TestLocalCacheInfo removed — local file cache was removed from data_loader.py.
+# Data is now held entirely in Streamlit's @st.cache_data (in-memory, per-server).
