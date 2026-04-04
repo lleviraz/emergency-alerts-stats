@@ -71,12 +71,12 @@ Load the variables before running:
 ```bash
 # macOS / Linux
 export LOCAL_MODE=true
-export DEFAULT_AREA="Kfar Netter"
+export DEFAULT_AREA="Your City"
 streamlit run dashboard.py
 
 # Windows PowerShell
 $env:LOCAL_MODE="true"
-$env:DEFAULT_AREA="Kfar Netter"
+$env:DEFAULT_AREA="Your City"
 streamlit run dashboard.py
 ```
 

@@ -72,7 +72,7 @@ IS_LOCAL: bool = os.getenv("LOCAL_MODE", "false").lower() == "true"
 COOLDOWN_MINUTES: int = 60   # minimum minutes between manual refreshes / trains
 AUTO_REFRESH_HOURS: int = 4  # cloud-mode automatic data refresh interval
 # Default area shown on first load.
-# Override locally via DEFAULT_AREA=Kfar Netter in .env (gitignored).
+# Override locally via DEFAULT_AREA="Your City" in .env (gitignored).
 # Cloud deployments fall back to "Tel Aviv" when the variable is absent.
 DEFAULT_AREA: str = os.getenv("DEFAULT_AREA", "Tel Aviv")
 
