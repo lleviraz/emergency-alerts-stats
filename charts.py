@@ -590,6 +590,39 @@ def comparison_summary_chart(summary_df: pd.DataFrame) -> go.Figure:
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+def siren_heatmap_chart(counts_df: pd.DataFrame) -> go.Figure:
+    """
+    Density heatmap of siren events overlaid on a zoomable OpenStreetMap of Israel.
+    counts_df must have columns: location, lat, lon, count.
+    """
+    if counts_df.empty:
+        return _empty_figure("No geocoded siren data available.")
+
+    fig = px.density_mapbox(
+        counts_df,
+        lat="lat",
+        lon="lon",
+        z="count",
+        hover_name="location",
+        hover_data={"count": True, "lat": False, "lon": False},
+        radius=28,
+        center={"lat": 31.5, "lon": 34.9},
+        zoom=6.5,
+        mapbox_style="open-street-map",
+        color_continuous_scale="YlOrRd",
+        opacity=0.65,
+        labels={"count": "Siren events"},
+        title="Siren Events Heatmap",
+    )
+    fig.update_layout(
+        template=_PLOTLY_TEMPLATE,
+        height=600,
+        margin=dict(l=0, r=0, t=40, b=0),
+        coloraxis_colorbar=dict(title="Sirens", thickness=14, len=0.6),
+    )
+    return fig
+
+
 def _empty_figure(message: str) -> go.Figure:
     fig = go.Figure()
     fig.add_annotation(

@@ -20,6 +20,7 @@ from charts import (
     interactive_risk_windows_chart,
     monthly_trend_chart,
     prediction_distribution_chart,
+    siren_heatmap_chart,
     timeline_chart,
     top_locations_chart,
 )
@@ -50,6 +51,7 @@ from transforms import (
     monthly_counts,
     predict_siren_probability,
     predict_time_to_siren_now,
+    siren_counts_by_location,
     top_locations,
     train_area_model,
     train_siren_classifier,
@@ -716,6 +718,15 @@ with tab_overview:
     with right2:
         heatmap_df = hourly_heatmap_data(df_view_history)
         st.plotly_chart(hourly_heatmap(heatmap_df), width="stretch", key="heatmap_overview")
+
+    # ── Siren heatmap ────────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("📍 Siren Activity Map")
+    st.caption("Density of siren events by location. Zoom and pan to explore.")
+    _heatmap_counts = siren_counts_by_location(df_view_history)
+    st.plotly_chart(
+        siren_heatmap_chart(_heatmap_counts), use_container_width=True, key="siren_heatmap"
+    )
 
     # ── Raw data table ────────────────────────────────────────────────────────
     with st.expander("Raw data (filtered)"):

@@ -624,3 +624,34 @@ def predict_siren_probability(classifier_state: dict) -> float:
     now = pd.Timestamp.now()
     X = np.array([_make_features(now.hour, now.dayofweek)])
     return float(classifier_state["model"].predict_proba(X)[0][1])
+
+
+# ── Siren heatmap data ───────────────────────────────────────────────────────
+
+def siren_counts_by_location(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return a DataFrame with columns [location, lat, lon, count] for all
+    siren-category events that can be geocoded via LOCATION_COORDS.
+    """
+    from location_coords import LOCATION_COORDS
+
+    sirens = df[df["category"].isin(SIREN_CATEGORIES)]
+    if sirens.empty:
+        return pd.DataFrame(columns=["location", "lat", "lon", "count"])
+
+    counts = (
+        sirens["location_en"]
+        .str.split(", ")
+        .explode()
+        .str.strip()
+        .dropna()
+        .value_counts()
+        .reset_index()
+    )
+    counts.columns = ["location", "count"]
+
+    coords = counts["location"].map(LOCATION_COORDS)
+    counts["lat"] = coords.map(lambda c: c[0] if isinstance(c, tuple) else None)
+    counts["lon"] = coords.map(lambda c: c[1] if isinstance(c, tuple) else None)
+
+    return counts.dropna(subset=["lat", "lon"]).reset_index(drop=True)
