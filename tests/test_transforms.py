@@ -96,20 +96,20 @@ class TestFilterByDateRange:
 class TestFilterByLocation:
     def _make_loc_df(self):
         rows = [
-            _make_row(datetime(2024, 3, 15, 8, 0), CAT_SIREN, location="Tel Aviv"),
-            _make_row(datetime(2024, 3, 15, 9, 0), CAT_SIREN, location="Jerusalem"),
+            _make_row(datetime(2024, 3, 15, 8, 0), CAT_SIREN, location="City Alpha"),
+            _make_row(datetime(2024, 3, 15, 9, 0), CAT_SIREN, location="City Beta"),
         ]
         return pd.DataFrame(rows)
 
     def test_filter_by_location_matches(self):
         df = self._make_loc_df()
-        result = T.filter_by_location(df, "Tel Aviv")
+        result = T.filter_by_location(df, "City Alpha")
         assert len(result) == 1
-        assert result["location_en"].iloc[0] == "Tel Aviv"
+        assert result["location_en"].iloc[0] == "City Alpha"
 
     def test_filter_by_location_no_match(self):
         df = self._make_loc_df()
-        result = T.filter_by_location(df, "Haifa")
+        result = T.filter_by_location(df, "City Gamma")
         assert result.empty
 
 
