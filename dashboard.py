@@ -72,7 +72,7 @@ IS_LOCAL: bool = os.getenv("LOCAL_MODE", "false").lower() == "true"
 COOLDOWN_MINUTES: int = 60   # minimum minutes between manual refreshes / trains
 AUTO_REFRESH_HOURS: int = 4  # cloud-mode automatic data refresh interval
 # Default area shown on first load.
-# Override locally via DEFAULT_AREA="Your City" in .env (gitignored).
+# Override locally via DEFAULT_AREA="Tel Aviv" in .env (gitignored).
 # Cloud deployments fall back to "Tel Aviv" when the variable is absent.
 DEFAULT_AREA: str = os.getenv("DEFAULT_AREA", "Tel Aviv")
 
@@ -551,11 +551,18 @@ with tab_area:
                     type="primary",
                     use_container_width=True,
                     help=(
-                        "Starts a live countdown timer from this moment. "
-                        "The regression model predicts how many minutes until a siren is expected, "
-                        "based on the current time of day and day of week. "
-                        "The classifier estimates the probability that a siren will actually follow. "
-                        "Click **✅ Click to mark the end of the event** to stop the timer."
+                        "⚠️ This is a visual simulation only — it is not connected to any "
+                        "real alert system. "
+                        "Starts a live elapsed-time timer from this moment. "
+                        "The timer background colour changes based on the historical "
+                        "pre-alert → siren statistics for this area: "
+                        "green = well within the expected window, yellow = approaching, "
+                        "orange = near the predicted time, red = past predicted time. "
+                        "The regression model predicts minutes until a siren is expected "
+                        "(based on time of day and day of week); "
+                        "the classifier estimates the probability a siren will follow. "
+                        "The timer auto-ends after 2× the match window has elapsed. "
+                        "Click ✅ to stop it manually at any time."
                     ),
                 ):
                     if not model_ready:
@@ -573,7 +580,25 @@ with tab_area:
                         st.rerun()
                 if not model_ready:
                     st.caption("⚠️ Train the models in the sidebar for predictions.")
+                else:
+                    _wm = ms.get("window_minutes", 15)
+                    st.caption(
+                        f"Visual timer only — not a real alert system. "
+                        f"Colours reflect the area's historical statistics (match window: {_wm} min). "
+                        f"Auto-ends after {_wm * 2} min."
+                    )
             else:
+                # ── Auto-end if 2× the match window has elapsed ─────────────
+                started_at = st.session_state["alert_started_at"]
+                _wm = ms.get("window_minutes", 15) if ms else 15
+                _auto_end_s = _wm * 2 * 60
+                if started_at is not None:
+                    _elapsed_s = (datetime.now() - started_at).total_seconds()
+                    if _elapsed_s >= _auto_end_s:
+                        st.session_state["alert_active"] = False
+                        st.session_state["alert_started_at"] = None
+                        st.rerun()
+
                 if st.button("✅ Click to mark the end of the event", type="secondary", use_container_width=True):
                     st.session_state["alert_active"] = False
                     st.session_state["alert_started_at"] = None
@@ -583,10 +608,13 @@ with tab_area:
                 predicted = st.session_state.get("last_prediction", 5.0)
                 p_siren = st.session_state.get("last_p_siren")
 
-                # Live countdown timer (JS-driven, updates every 500 ms in browser)
+                # Live elapsed timer (JS-driven, updates every 500 ms in browser).
+                # Colour reflects position relative to the predicted siren time.
+                # After 2× the match window the display greys out to signal auto-end.
                 if started_at is not None:
                     start_ms = int(started_at.timestamp() * 1000)
-                    pred_ms = int(predicted * 60 * 1000)
+                    pred_ms  = int(predicted * 60 * 1000)
+                    max_ms   = int(_auto_end_s * 1000)
                     p_siren_html = ""
                     if p_siren is not None:
                         pct = f"{p_siren * 100:.0f}%"
@@ -598,7 +626,7 @@ with tab_area:
                     timer_html = f"""
                     <div style="font-family:monospace;text-align:center;padding:16px;
                                 border-radius:12px;border:1px solid #444;background:#0e1117;">
-                      <div style="font-size:1em;color:#aaa;margin-bottom:8px;
+                      <div id="tmr-label" style="font-size:1em;color:#aaa;margin-bottom:8px;
                                   text-transform:uppercase;letter-spacing:2px;">
                         Time since pre-alert{p_siren_html}
                       </div>
@@ -607,25 +635,33 @@ with tab_area:
                            transition:background-color 0.8s ease;color:#fff;">0:00</div>
                       <div style="margin-top:10px;color:#aaa;font-size:1em;">
                         Predicted: <span style="color:#ffd166;font-weight:bold">{predicted:.1f} min</span>
+                        &nbsp;·&nbsp; Auto-ends at <span style="color:#aaa">{_wm * 2} min</span>
                       </div>
                     </div>
                     <script>
                       (function(){{
-                        var startMs={start_ms}, predMs={pred_ms};
+                        var startMs={start_ms}, predMs={pred_ms}, maxMs={max_ms};
                         var el=document.getElementById('tmr');
-                        function clr(e){{
+                        var lbl=document.getElementById('tmr-label');
+                        function timerColor(e){{
                           var r=e/predMs;
                           if(r<0.5)  return '#2dc653';
                           if(r<0.8)  return '#ffd166';
                           if(r<1.0)  return '#f4a261';
                           if(r<1.35) return '#e63946';
-                          return '#ffd166';
+                          return '#c0392b';
                         }}
                         function tick(){{
                           var e=Date.now()-startMs;
+                          if(e>=maxMs){{
+                            el.textContent='--:--';
+                            el.style.backgroundColor='#333';
+                            if(lbl) lbl.textContent='MAX WINDOW ELAPSED \u2014 interact with the page to end';
+                            return;
+                          }}
                           var s=Math.floor(e/1000);
                           el.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
-                          el.style.backgroundColor=clr(e);
+                          el.style.backgroundColor=timerColor(e);
                         }}
                         tick(); setInterval(tick,500);
                       }})();
