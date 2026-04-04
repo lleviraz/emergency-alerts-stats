@@ -294,46 +294,73 @@ def area_timings(
       avg_pre_to_clear_min: average minutes from pre-alert to next all-clear (or None)
       convergence_rate    : fraction of pre-alerts followed by a siren within window
       n_converged         : count of pre-alerts that preceded a siren
+
+    Uses pd.merge_asof (O(n log n)) instead of iterrows (O(n²)).
     """
-    area_df = filter_by_location(df, location_en).sort_values("parsed_alertDate")
+    area_df = filter_by_location(df, location_en)
 
-    pre_alerts = area_df[area_df["category"].isin(PRE_ALERT_CATEGORIES)].reset_index(drop=True)
-    sirens = area_df[area_df["category"].isin(SIREN_CATEGORIES)].reset_index(drop=True)
-    all_clears = area_df[area_df["category"].isin(ALL_CLEAR_CATEGORIES)].reset_index(drop=True)
-
-    window = pd.Timedelta(minutes=window_minutes)
-    pre_to_siren: list[float] = []
-    pre_to_clear: list[float] = []
-    n_converged = 0
-
-    for _, pre in pre_alerts.iterrows():
-        t = pre["parsed_alertDate"]
-        if pd.isnull(t):
-            continue
-
-        next_sirens = sirens[
-            (sirens["parsed_alertDate"] > t)
-            & (sirens["parsed_alertDate"] <= t + window)
-        ]
-        if not next_sirens.empty:
-            delta_sec = (next_sirens["parsed_alertDate"].min() - t).total_seconds()
-            pre_to_siren.append(delta_sec / 60)
-            n_converged += 1
-
-        next_clears = all_clears[
-            (all_clears["parsed_alertDate"] > t)
-            & (all_clears["parsed_alertDate"] <= t + window)
-        ]
-        if not next_clears.empty:
-            delta_sec = (next_clears["parsed_alertDate"].min() - t).total_seconds()
-            pre_to_clear.append(delta_sec / 60)
+    pre_alerts = (
+        area_df[area_df["category"].isin(PRE_ALERT_CATEGORIES)][["parsed_alertDate"]]
+        .dropna()
+        .sort_values("parsed_alertDate")
+        .reset_index(drop=True)
+    )
+    sirens = (
+        area_df[area_df["category"].isin(SIREN_CATEGORIES)][["parsed_alertDate"]]
+        .dropna()
+        .sort_values("parsed_alertDate")
+        .reset_index(drop=True)
+    )
+    all_clears = (
+        area_df[area_df["category"].isin(ALL_CLEAR_CATEGORIES)][["parsed_alertDate"]]
+        .dropna()
+        .sort_values("parsed_alertDate")
+        .reset_index(drop=True)
+    )
 
     n_pre = len(pre_alerts)
+    tol = pd.Timedelta(minutes=window_minutes)
+
+    _empty = {"n_pre_alerts": n_pre, "n_sirens": len(sirens),
+               "avg_pre_to_siren_min": None, "avg_pre_to_clear_min": None,
+               "convergence_rate": None, "n_converged": 0}
+    if n_pre == 0:
+        return _empty
+
+    pre_s = pre_alerts.rename(columns={"parsed_alertDate": "pre_time"})
+
+    # ── pre-alert → siren ─────────────────────────────────────────────────────
+    if not sirens.empty:
+        m_s = pd.merge_asof(
+            pre_s, sirens.rename(columns={"parsed_alertDate": "siren_time"}),
+            left_on="pre_time", right_on="siren_time",
+            direction="forward", tolerance=tol,
+        )
+        hit_s = m_s["siren_time"].notna()
+        n_converged = int(hit_s.sum())
+        deltas_s = (m_s.loc[hit_s, "siren_time"] - m_s.loc[hit_s, "pre_time"]).dt.total_seconds() / 60
+        avg_siren = float(deltas_s.mean()) if not deltas_s.empty else None
+    else:
+        n_converged, avg_siren = 0, None
+
+    # ── pre-alert → all-clear ─────────────────────────────────────────────────
+    if not all_clears.empty:
+        m_c = pd.merge_asof(
+            pre_s, all_clears.rename(columns={"parsed_alertDate": "clear_time"}),
+            left_on="pre_time", right_on="clear_time",
+            direction="forward", tolerance=tol,
+        )
+        hit_c = m_c["clear_time"].notna()
+        deltas_c = (m_c.loc[hit_c, "clear_time"] - m_c.loc[hit_c, "pre_time"]).dt.total_seconds() / 60
+        avg_clear = float(deltas_c.mean()) if not deltas_c.empty else None
+    else:
+        avg_clear = None
+
     return {
         "n_pre_alerts": n_pre,
         "n_sirens": len(sirens),
-        "avg_pre_to_siren_min": (sum(pre_to_siren) / len(pre_to_siren)) if pre_to_siren else None,
-        "avg_pre_to_clear_min": (sum(pre_to_clear) / len(pre_to_clear)) if pre_to_clear else None,
+        "avg_pre_to_siren_min": avg_siren,
+        "avg_pre_to_clear_min": avg_clear,
         "convergence_rate": (n_converged / n_pre) if n_pre > 0 else None,
         "n_converged": n_converged,
     }
@@ -500,34 +527,45 @@ def convergence_rate_over_time(
     that were followed by a siren within window_minutes.
 
     Returns columns: date, convergence_rate (0–1), n_pre_alerts.
+    Uses pd.merge_asof (O(n log n)) instead of iterrows (O(n²)).
     """
-    area_df = filter_by_location(df, location_en).sort_values("parsed_alertDate")
-    pre_alerts = area_df[area_df["category"].isin(PRE_ALERT_CATEGORIES)].reset_index(drop=True)
-    sirens = area_df[area_df["category"].isin(SIREN_CATEGORIES)].reset_index(drop=True)
+    area_df = filter_by_location(df, location_en)
+    pre_alerts = (
+        area_df[area_df["category"].isin(PRE_ALERT_CATEGORIES)][
+            ["parsed_alertDate", "parsed_date"]
+        ]
+        .dropna(subset=["parsed_alertDate"])
+        .sort_values("parsed_alertDate")
+        .reset_index(drop=True)
+    )
+    sirens = (
+        area_df[area_df["category"].isin(SIREN_CATEGORIES)][["parsed_alertDate"]]
+        .dropna()
+        .sort_values("parsed_alertDate")
+        .reset_index(drop=True)
+    )
 
     if pre_alerts.empty:
         return pd.DataFrame(columns=["date", "convergence_rate", "n_pre_alerts"])
 
-    window = pd.Timedelta(minutes=window_minutes)
-    records: list[dict] = []
+    if sirens.empty:
+        pre_alerts["converged"] = 0
+    else:
+        merged = pd.merge_asof(
+            pre_alerts,
+            sirens.rename(columns={"parsed_alertDate": "siren_time"}),
+            left_on="parsed_alertDate", right_on="siren_time",
+            direction="forward",
+            tolerance=pd.Timedelta(minutes=window_minutes),
+        )
+        pre_alerts = merged.copy()
+        pre_alerts["converged"] = pre_alerts["siren_time"].notna().astype(int)
 
-    for _, pre in pre_alerts.iterrows():
-        t = pre["parsed_alertDate"]
-        if pd.isnull(t):
-            continue
-        converged = not sirens[
-            (sirens["parsed_alertDate"] > t) & (sirens["parsed_alertDate"] <= t + window)
-        ].empty
-        records.append({"date": pre["parsed_date"], "converged": int(converged)})
-
-    if not records:
-        return pd.DataFrame(columns=["date", "convergence_rate", "n_pre_alerts"])
-
-    events = pd.DataFrame(records)
     daily = (
-        events.groupby("date")
+        pre_alerts.groupby("parsed_date")
         .agg(convergence_rate=("converged", "mean"), n_pre_alerts=("converged", "count"))
         .reset_index()
+        .rename(columns={"parsed_date": "date"})
     )
     return daily.sort_values("date")
 
