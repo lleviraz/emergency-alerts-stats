@@ -1,15 +1,11 @@
 """
 Data fetching and parsing for the Israel Alerts dashboard.
 
-On startup the app checks for a local cache file and loads it automatically.
-"Load / Refresh Data" downloads fresh data from GitHub and overwrites the cache.
+Local file caching has been intentionally removed — data is held in
+Streamlit's @st.cache_data (in-memory, shared across all sessions, TTL-based).
 """
 
 import io
-import os
-import threading
-from datetime import datetime
-from pathlib import Path
 from typing import Callable
 
 import pandas as pd
@@ -18,42 +14,14 @@ import requests
 DATA_URL = (
     "https://raw.githubusercontent.com/dleshem/israel-alerts-data/main/israel-alerts.csv"
 )
-LOCAL_CACHE_PATH = Path("israel-alerts.csv")
-_write_lock = threading.Lock()
-
-
-# ── Local cache ───────────────────────────────────────────────────────────────
-
-def local_cache_info() -> tuple[bool, datetime | None]:
-    """
-    Returns (exists, mtime).
-    mtime is the file's last-modified time as a datetime, or None if missing.
-    """
-    if LOCAL_CACHE_PATH.exists():
-        mtime = datetime.fromtimestamp(LOCAL_CACHE_PATH.stat().st_mtime)
-        return True, mtime
-    return False, None
-
-
-def load_from_local() -> bytes | None:
-    """Read the local cache file. Returns raw bytes or None if not found."""
-    if LOCAL_CACHE_PATH.exists():
-        return LOCAL_CACHE_PATH.read_bytes()
-    return None
-
-
-def _save_to_local(csv_bytes: bytes) -> None:
-    """Persist downloaded bytes to the local cache file (thread-safe)."""
-    with _write_lock:
-        LOCAL_CACHE_PATH.write_bytes(csv_bytes)
 
 
 # ── Remote download ───────────────────────────────────────────────────────────
 
 def stream_download(on_progress: Callable[[float], None]) -> bytes:
     """
-    Stream-download the CSV, call on_progress(0.0–1.0) as data arrives,
-    save to local cache, and return raw bytes.
+    Stream-download the CSV, calling on_progress(0.0–1.0) as data arrives.
+    Returns raw bytes. The caller is responsible for caching.
     """
     with requests.get(DATA_URL, stream=True, timeout=120) as resp:
         resp.raise_for_status()
@@ -67,9 +35,7 @@ def stream_download(on_progress: Callable[[float], None]) -> bytes:
                 if total:
                     on_progress(min(received / total, 1.0))
         on_progress(1.0)
-        csv_bytes = b"".join(chunks)
-    _save_to_local(csv_bytes)
-    return csv_bytes
+        return b"".join(chunks)
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────

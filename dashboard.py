@@ -3,6 +3,8 @@ Israel Civil Defense Alerts — Live Dashboard
 Run with:  streamlit run dashboard.py
 """
 
+import os
+import threading
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -26,8 +28,6 @@ from charts import (
 )
 from data_loader import (
     load_dashboard_df,
-    load_from_local,
-    local_cache_info,
     stream_download,
 )
 from transforms import (
@@ -65,6 +65,37 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Deployment mode ───────────────────────────────────────────────────────────
+# Set LOCAL_MODE=true in your shell (or .env) for unrestricted local dev.
+# On Streamlit Community Cloud the variable is absent → cloud mode enforced.
+IS_LOCAL: bool = os.getenv("LOCAL_MODE", "false").lower() == "true"
+COOLDOWN_MINUTES: int = 60  # minimum minutes between data refreshes / model trains
+
+# ── Process-wide shared state (all users, same Python process) ────────────────
+# Protected by explicit locks — see "check-and-set" pattern in button handlers.
+
+_download_lock = threading.Lock()
+_last_download_time: datetime | None = None  # set when a real HTTP download occurs
+
+_training_lock = threading.Lock()
+_training_timestamps: dict[str, datetime] = {}  # area -> last trained_at
+
+
+# ── Shared data loader (cached across ALL users, TTL = 1 hour) ───────────────
+@st.cache_data(ttl=COOLDOWN_MINUTES * 60, show_spinner=False)
+def _cached_download() -> pd.DataFrame:
+    """
+    Download, parse and label the CSV.  Runs at most once per hour across all
+    connected users.  Streamlit's cache_data uses an internal lock so concurrent
+    calls are automatically serialised — only the first caller downloads; the
+    rest receive the cached DataFrame.
+    """
+    csv_bytes = stream_download(lambda _: None)
+    df = load_dashboard_df(csv_bytes)
+    df = apply_english_labels(df)
+    df = apply_english_locations(df)
+    return df
+
 # ── Session state init ────────────────────────────────────────────────────────
 for _key, _default in [
     ("df", None),
@@ -91,67 +122,68 @@ if st.session_state["pending_area"] is not None:
     st.session_state["area_select"] = st.session_state["pending_area"]
     st.session_state["pending_area"] = None
 
-# ── Auto-load from local cache on first run ───────────────────────────────────
-if st.session_state["df"] is None:
-    _cache_bytes = load_from_local()
-    if _cache_bytes is not None:
-        with st.spinner("Loading local data cache…"):
-            _raw = load_dashboard_df(_cache_bytes)
-            _raw = apply_english_labels(_raw)
-            _raw = apply_english_locations(_raw)
-        st.session_state["df"] = _raw
-        _, _mtime = local_cache_info()
-        st.session_state["loaded_at"] = _mtime
-        st.rerun()
-
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("Controls")
 
     # ── Load / Refresh ──────────────────────────────────────────────────────
-    if st.button("⬇ Load / Refresh Data", use_container_width=True, type="primary"):
-        progress_bar = st.progress(0.0, text="Connecting…")
-        status_text = st.empty()
+    # Determine cooldown state (thread-safe read under lock)
+    with _download_lock:
+        _dl_age_s = (
+            (datetime.now() - _last_download_time).total_seconds()
+            if _last_download_time else None
+        )
+    _can_refresh = IS_LOCAL or _dl_age_s is None or _dl_age_s >= COOLDOWN_MINUTES * 60
+    if _can_refresh:
+        _refresh_help = "Download the latest alert data from GitHub." if IS_LOCAL else None
+    else:
+        _mins_left = int(COOLDOWN_MINUTES - _dl_age_s // 60)
+        _refresh_help = f"⏳ Next refresh available in ~{_mins_left} min."
 
-        def _on_progress(fraction: float) -> None:
-            progress_bar.progress(fraction, text=f"Downloading… {fraction * 100:.0f}%")
+    if st.button(
+        "⬇ Load / Refresh Data",
+        use_container_width=True,
+        type="primary",
+        disabled=not _can_refresh,
+        help=_refresh_help,
+    ):
+        # Atomic check-and-set: block any concurrent refresh attempt
+        with _download_lock:
+            _dl_age_s2 = (
+                (datetime.now() - _last_download_time).total_seconds()
+                if _last_download_time else None
+            )
+            _proceed = IS_LOCAL or _dl_age_s2 is None or _dl_age_s2 >= COOLDOWN_MINUTES * 60
+            if _proceed:
+                # Optimistically stamp now — prevents a second user from also
+                # triggering a download while ours is still in flight.
+                globals()["_last_download_time"] = datetime.now()
 
-        try:
-            csv_bytes = stream_download(_on_progress)
-            status_text.text("Parsing data…")
-            raw = load_dashboard_df(csv_bytes)
-            raw = apply_english_labels(raw)
-            raw = apply_english_locations(raw)
-            st.session_state["df"] = raw
-            st.session_state["loaded_at"] = datetime.now()
-            progress_bar.empty()
-            status_text.empty()
-            st.rerun()
-        except Exception as exc:
-            progress_bar.empty()
-            status_text.empty()
-            st.error(f"Failed to load data: {exc}")
+        if _proceed:
+            try:
+                _cached_download.clear()
+                with st.spinner("Downloading fresh data…"):
+                    _fresh = _cached_download()
+                st.session_state["df"] = _fresh
+                st.session_state["loaded_at"] = _last_download_time
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Failed to load data: {exc}")
+        else:
+            st.warning("Another refresh just started — please wait a moment.")
 
     # ── Data freshness ──────────────────────────────────────────────────────
-    cache_exists, file_mtime = local_cache_info()
-    if cache_exists and file_mtime:
-        age_hours = (datetime.now() - file_mtime).total_seconds() / 3600
-        if age_hours < 24:
-            freshness = f"{age_hours:.0f}h ago"
-            freshness_color = "🟢"
-        elif age_hours < 72:
-            freshness = f"{age_hours / 24:.0f}d ago"
-            freshness_color = "🟡"
-        else:
-            freshness = f"{age_hours / 24:.0f}d ago"
-            freshness_color = "🔴"
+    _loaded_at = st.session_state.get("loaded_at") or _last_download_time
+    if _loaded_at:
+        _age_h = (datetime.now() - _loaded_at).total_seconds() / 3600
+        _color = "🟢" if _age_h < 24 else ("🟡" if _age_h < 72 else "🔴")
+        _age_str = f"{_age_h:.0f}h ago" if _age_h < 24 else f"{_age_h / 24:.0f}d ago"
         st.caption(
-            f"{freshness_color} Local file: **{file_mtime.strftime('%Y-%m-%d %H:%M')}** ({freshness})"
+            f"{_color} Data: **{_loaded_at.strftime('%Y-%m-%d %H:%M')}** ({_age_str})"
         )
-    elif st.session_state["loaded_at"]:
-        st.caption(
-            f"Loaded: {st.session_state['loaded_at'].strftime('%Y-%m-%d %H:%M:%S')}"
-        )
+        if not IS_LOCAL and _dl_age_s is not None and _dl_age_s < COOLDOWN_MINUTES * 60:
+            _mins_left2 = int(COOLDOWN_MINUTES - _dl_age_s // 60)
+            st.caption(f"Next refresh in ~{_mins_left2} min")
 
     st.divider()
 
@@ -240,18 +272,32 @@ with st.sidebar:
             if area_active_sidebar
             else "🧠 Train models  *(select an area first)*"
         )
-        # Light up as primary when the area needs training:
-        # no cache entry, or cached model was trained on different data.
+        # Light up as primary when the area needs training.
         _cache_entry = st.session_state["area_model_cache"].get(selected_area)
         _needs_training = area_active_sidebar and (
             _cache_entry is None
             or _cache_entry.get("loaded_at") != st.session_state.get("loaded_at")
         )
+        # Cooldown: in cloud mode, block re-training within COOLDOWN_MINUTES.
+        with _training_lock:
+            _train_last = _training_timestamps.get(selected_area)
+            _train_age_s = (
+                (datetime.now() - _train_last).total_seconds() if _train_last else None
+            )
+        _can_train = area_active_sidebar and (
+            IS_LOCAL or _train_age_s is None or _train_age_s >= COOLDOWN_MINUTES * 60
+        )
+        _train_help = None
+        if area_active_sidebar and not _can_train:
+            _train_mins_left = int(COOLDOWN_MINUTES - _train_age_s // 60)
+            _train_help = f"⏳ Models were just trained. Next training in ~{_train_mins_left} min."
+
         if st.button(
             train_label,
             use_container_width=True,
-            disabled=not area_active_sidebar,
-            type="primary" if _needs_training else "secondary",
+            disabled=not _can_train,
+            type="primary" if (_needs_training and _can_train) else "secondary",
+            help=_train_help,
         ):
             df_history_train = filter_categories(
                 df_full, include_drills=False, selected_category_ids=None
@@ -286,6 +332,9 @@ with st.sidebar:
                     "classifier_state": None if clf_err else classifier_state,
                     "loaded_at": st.session_state.get("loaded_at"),
                 }
+                # Stamp training time (thread-safe) to enforce cloud cooldown
+                with _training_lock:
+                    _training_timestamps[selected_area] = datetime.now()
                 st.success(
                     f"Models ready · {model_state['n_samples']} pairs · "
                     f"avg {model_state['historical_avg_min']:.1f} min"
