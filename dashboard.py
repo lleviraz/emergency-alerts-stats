@@ -71,6 +71,10 @@ st.set_page_config(
 IS_LOCAL: bool = os.getenv("LOCAL_MODE", "false").lower() == "true"
 COOLDOWN_MINUTES: int = 60   # minimum minutes between manual refreshes / trains
 AUTO_REFRESH_HOURS: int = 4  # cloud-mode automatic data refresh interval
+# Default area shown on first load.
+# Override locally via DEFAULT_AREA=Kfar Netter in .env (gitignored).
+# Cloud deployments fall back to "Tel Aviv" when the variable is absent.
+DEFAULT_AREA: str = os.getenv("DEFAULT_AREA", "Tel Aviv")
 
 # ── Process-wide shared state ─────────────────────────────────────────────────
 # IMPORTANT: plain module-level variables are RESET on every Streamlit script
@@ -168,6 +172,22 @@ if not IS_LOCAL and st.session_state["df"] is not None:
         except Exception:
             pass  # silent — never disrupt the user on a background refresh failure
 
+# ── Auto-populate new sessions from shared cache ──────────────────────────────
+# When a user opens a new tab or hits F5, their session_state["df"] is None
+# but _cached_download() may already hold fresh data in Streamlit's cache.
+# Load it immediately so they never see "No data" when data exists.
+if st.session_state["df"] is None:
+    try:
+        with st.spinner("Loading data…"):
+            _session_df = _cached_download()
+        st.session_state["df"] = _session_df
+        if _dl_state["last_time"] is None:
+            _dl_state["last_time"] = datetime.now()
+        st.session_state["loaded_at"] = _dl_state["last_time"]
+        st.rerun()
+    except Exception:
+        pass  # No cached data yet — fall through to show the manual load button
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("Controls")
@@ -177,7 +197,9 @@ with st.sidebar:
     with _dl_state["lock"]:
         _dl_last = _dl_state["last_time"]
     _dl_age_s = (datetime.now() - _dl_last).total_seconds() if _dl_last else None
-    _can_refresh = IS_LOCAL or _dl_age_s is None or _dl_age_s >= COOLDOWN_MINUTES * 60
+    # Always allow refresh when this session has no data (new tab / F5)
+    _no_data = st.session_state["df"] is None
+    _can_refresh = _no_data or IS_LOCAL or _dl_age_s is None or _dl_age_s >= COOLDOWN_MINUTES * 60
     _refresh_help = None
     if not _can_refresh:
         _mins_left = int(COOLDOWN_MINUTES - _dl_age_s // 60)
@@ -261,7 +283,15 @@ with st.sidebar:
         st.subheader("Area Filter")
         all_locations = get_all_locations(df_full)
         area_options = ["(All areas)"] + all_locations
-        default_idx = area_options.index("Kfar Netter") if "Kfar Netter" in area_options else 0
+        # Priority: 1) user already picked something (session_state, from a
+        #   previous interaction this session), 2) ?area= URL param (bookmark /
+        #   shared link), 3) DEFAULT_AREA env var, 4) first option "(All areas)".
+        # Note: index= only applies on the very first render — once the widget
+        # is in session_state Streamlit ignores it, which is the correct behaviour.
+        _area_pref = st.query_params.get("area", DEFAULT_AREA)
+        default_idx = (
+            area_options.index(_area_pref) if _area_pref in area_options else 0
+        )
         selected_area = st.selectbox(
             "Focus on area",
             options=area_options,
@@ -426,6 +456,12 @@ area_active = selected_area != "(All areas)"
 
 # ── Handle area change: stop event, update recents, restore cached model ──────
 if st.session_state["active_area"] != selected_area:
+    # Keep URL in sync so the user can bookmark / share their current area.
+    if selected_area != "(All areas)":
+        st.query_params["area"] = selected_area
+    elif "area" in st.query_params:
+        del st.query_params["area"]
+
     prev = st.session_state["active_area"]
     # Push previous area into recent list (skip None / all-areas placeholder)
     if prev and prev != "(All areas)":
