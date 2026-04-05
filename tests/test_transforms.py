@@ -409,3 +409,79 @@ class TestConvergenceRateOverTime:
     def test_output_columns(self, paired_df):
         result = T.convergence_rate_over_time(paired_df, AREA)
         assert set(result.columns) == {"date", "convergence_rate", "n_pre_alerts"}
+
+
+# ── all_areas_risk_summary ────────────────────────────────────────────────────
+
+class TestAllAreasRiskSummary:
+    REQUIRED_COLS = {
+        "area", "n_pre_alerts", "n_sirens", "n_converged",
+        "convergence_rate", "n_days", "freq_score",
+    }
+
+    def test_returns_required_columns(self, paired_df):
+        result = T.all_areas_risk_summary(paired_df)
+        assert self.REQUIRED_COLS == set(result.columns)
+
+    def test_single_area_full_convergence(self, paired_df):
+        """paired_df: 10 pre-alerts + 10 sirens 5 min apart → rate = 1.0."""
+        result = T.all_areas_risk_summary(paired_df)
+        assert len(result) == 1
+        row = result.iloc[0]
+        assert row["area"] == AREA
+        assert row["n_pre_alerts"] == 10
+        assert row["convergence_rate"] == pytest.approx(1.0)
+
+    def test_single_area_zero_convergence(self, no_match_df):
+        """no_match_df: sirens 20 min after pre-alerts → outside 15-min window."""
+        result = T.all_areas_risk_summary(no_match_df)
+        assert len(result) == 1
+        assert result.iloc[0]["convergence_rate"] == pytest.approx(0.0)
+        assert result.iloc[0]["n_converged"] == 0
+
+    def test_mixed_df_partial_convergence(self, mixed_df):
+        """mixed_df: 12 pre-alerts, 8 converged → rate ≈ 0.667."""
+        result = T.all_areas_risk_summary(mixed_df)
+        row = result.iloc[0]
+        assert row["n_pre_alerts"] == 12
+        assert row["n_converged"] == 8
+        assert row["convergence_rate"] == pytest.approx(8 / 12)
+
+    def test_freq_score_capped_at_one(self, base_time):
+        """An area with more than 1 pre-alert per day should have freq_score = 1.0."""
+        # 5 pre-alerts all on the same day (n_days will be 1)
+        rows = [_make_row(base_time + pd.Timedelta(hours=i), CAT_PRE_ALERT) for i in range(5)]
+        df = pd.DataFrame(rows)
+        result = T.all_areas_risk_summary(df)
+        assert result.iloc[0]["freq_score"] == pytest.approx(1.0)
+
+    def test_empty_df_returns_empty(self):
+        df = pd.DataFrame(columns=[
+            "date", "alertDate", "category", "data", "category_desc",
+            "parsed_date", "parsed_alertDate", "hour", "day_of_week",
+            "category_en", "location_en",
+        ])
+        result = T.all_areas_risk_summary(df)
+        assert result.empty
+        assert self.REQUIRED_COLS == set(result.columns)
+
+    def test_no_pre_alerts_returns_empty(self, base_time):
+        """A df with only sirens (no pre-alerts) should return an empty summary."""
+        rows = [_make_row(base_time, CAT_SIREN)]
+        df = pd.DataFrame(rows)
+        result = T.all_areas_risk_summary(df)
+        assert result.empty
+
+    def test_multiple_areas(self, base_time):
+        """Two areas should each appear as a separate row."""
+        rows = (
+            [_make_row(base_time + pd.Timedelta(hours=i), CAT_PRE_ALERT, location="City Alpha")
+             for i in range(3)]
+            + [_make_row(base_time + pd.Timedelta(hours=i), CAT_PRE_ALERT, location="City Beta")
+               for i in range(2)]
+        )
+        df = pd.DataFrame(rows)
+        result = T.all_areas_risk_summary(df)
+        assert set(result["area"]) == {"City Alpha", "City Beta"}
+        assert result[result["area"] == "City Alpha"]["n_pre_alerts"].iloc[0] == 3
+        assert result[result["area"] == "City Beta"]["n_pre_alerts"].iloc[0] == 2

@@ -664,6 +664,80 @@ def predict_siren_probability(classifier_state: dict) -> float:
     return float(classifier_state["model"].predict_proba(X)[0][1])
 
 
+# ── Risk score validation helpers ───────────────────────────────────────────
+
+def all_areas_risk_summary(df: pd.DataFrame, window_minutes: int = 15) -> pd.DataFrame:
+    """
+    Compute per-area convergence_rate and event-frequency score for every area
+    that has at least one pre-alert in *df*.
+
+    Returns a DataFrame with columns:
+        area, n_pre_alerts, n_sirens, n_converged,
+        convergence_rate, n_days, freq_score
+
+    where:
+        convergence_rate = fraction of pre-alerts followed by a siren
+                           within *window_minutes*
+        freq_score       = min(1.0, pre_alerts_per_day)  — capped at 1
+    """
+    _empty = pd.DataFrame(columns=[
+        "area", "n_pre_alerts", "n_sirens", "n_converged",
+        "convergence_rate", "n_days", "freq_score",
+    ])
+
+    pre = df[df["category"].isin(PRE_ALERT_CATEGORIES)].copy()
+    if pre.empty:
+        return _empty
+
+    sir = df[df["category"].isin(SIREN_CATEGORIES)].copy()
+
+    n_days = max(
+        1,
+        (df["parsed_alertDate"].max() - df["parsed_alertDate"].min()).days + 1,
+    )
+    tol = pd.Timedelta(minutes=window_minutes)
+
+    pre = pre.sort_values("parsed_alertDate")
+    sir = sir.sort_values("parsed_alertDate")
+
+    records = []
+    for area in pre["location_en"].dropna().unique():
+        pre_a = pre[pre["location_en"] == area]
+        n_pa  = len(pre_a)
+        sir_a = sir[sir["location_en"] == area]
+        n_sir = len(sir_a)
+
+        if n_sir == 0:
+            n_conv = 0
+        else:
+            m = pd.merge_asof(
+                pre_a[["parsed_alertDate"]].rename(columns={"parsed_alertDate": "pre_time"}),
+                sir_a[["parsed_alertDate"]].rename(columns={"parsed_alertDate": "siren_time"}),
+                left_on="pre_time",
+                right_on="siren_time",
+                direction="forward",
+                tolerance=tol,
+            )
+            n_conv = int(m["siren_time"].notna().sum())
+
+        records.append({
+            "area": area,
+            "n_pre_alerts": n_pa,
+            "n_sirens": n_sir,
+            "n_converged": n_conv,
+            "convergence_rate": n_conv / n_pa,
+        })
+
+    if not records:
+        return _empty
+
+    result = pd.DataFrame(records)
+    result["n_days"]     = n_days
+    result["freq_score"] = (result["n_pre_alerts"] / n_days).clip(upper=1.0)
+
+    return result.sort_values("n_pre_alerts", ascending=False).reset_index(drop=True)
+
+
 # ── Siren heatmap data ───────────────────────────────────────────────────────
 
 def siren_counts_by_location(df: pd.DataFrame) -> pd.DataFrame:

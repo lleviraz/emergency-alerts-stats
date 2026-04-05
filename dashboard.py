@@ -22,6 +22,8 @@ from charts import (
     interactive_risk_windows_chart,
     monthly_trend_chart,
     prediction_distribution_chart,
+    risk_correlation_chart,
+    risk_sensitivity_chart,
     siren_heatmap_chart,
     timeline_chart,
     top_locations_chart,
@@ -51,6 +53,7 @@ from transforms import (
     monthly_counts,
     predict_siren_probability,
     predict_time_to_siren_now,
+    all_areas_risk_summary,
     siren_counts_by_location,
     top_locations,
     train_area_model,
@@ -121,6 +124,10 @@ def _cached_area_timings(df: pd.DataFrame, area: str) -> dict:
 @st.cache_data(show_spinner=False)
 def _cached_convergence_rate(df: pd.DataFrame, area: str) -> pd.DataFrame:
     return convergence_rate_over_time(df, area, window_minutes=15)
+
+@st.cache_data(show_spinner=False)
+def _cached_all_areas_risk_summary(df: pd.DataFrame) -> "pd.DataFrame":
+    return all_areas_risk_summary(df, window_minutes=15)
 
 # ── Session state init ────────────────────────────────────────────────────────
 for _key, _default in [
@@ -609,13 +616,17 @@ with tab_area:
                             f"**Risk level**  \n"
                             f"## {_risk_icon} {_risk_label}",
                             help=(
-                                f"Composite score: **{_risk_score}/100**  \n"
-                                "60% weight → convergence rate (how reliably pre-alerts "
-                                "lead to sirens).  \n"
-                                "40% weight → event frequency (pre-alerts per day vs the "
-                                "selected time window).  \n"
-                                "Interpretation: Low < 20 · Moderate 20–44 · "
-                                "High 45–69 · Critical ≥ 70."
+                                f"Composite score: **{_risk_score} / 100**  \n"
+                                "**Formula:** 60 % × convergence rate + 40 % × event frequency  \n"
+                                "• Convergence rate — how reliably pre-alerts lead to sirens  \n"
+                                "• Event frequency — pre-alerts per day (capped at 1)  \n\n"
+                                "The 60 / 40 split was validated in the **Overview → "
+                                "🔬 Risk Score Weight Validation** panel using a "
+                                "Pearson correlation check (are the two components independent?) "
+                                "and a Spearman rank-stability sweep (does changing the weight "
+                                "re-order the areas significantly?).  \n\n"
+                                "Thresholds: 🟢 Low < 20 · 🟡 Moderate 20–44 · "
+                                "🟠 High 45–69 · 🔴 Critical ≥ 70."
                             ),
                         )
             elif not model_ready:
@@ -977,6 +988,99 @@ with tab_overview:
     st.plotly_chart(
         siren_heatmap_chart(_heatmap_counts), use_container_width=True, key="siren_heatmap"
     )
+
+    # ── Risk score weight validation ─────────────────────────────────────────
+    with st.expander("🔬 Risk Score Weight Validation", expanded=False):
+        st.markdown(
+            "The area **Risk Score** shown in the Area Analysis tab combines two signals: "
+            "**convergence rate** (how reliably pre-alerts lead to sirens) and "
+            "**event frequency** (how active an area is), weighted 60 / 40. "
+            "This section checks whether that split is reasonable."
+        )
+        with st.spinner("Computing per-area stats…"):
+            _risk_df = _cached_all_areas_risk_summary(df_full)
+
+        if _risk_df.empty or len(_risk_df) < 3:
+            st.info("Not enough areas with pre-alert data to run the validation.")
+        else:
+            _r_pearson = _risk_df["freq_score"].corr(_risk_df["convergence_rate"])
+
+            # ── Interpretation text ──────────────────────────────────────────
+            if abs(_r_pearson) < 0.3:
+                _corr_msg = (
+                    f"**Pearson r = {_r_pearson:.2f}** — the two components are largely "
+                    "**independent**. They capture different dimensions of risk, so the "
+                    "weight split matters: shifting it significantly would re-order areas."
+                )
+            elif abs(_r_pearson) < 0.6:
+                _corr_msg = (
+                    f"**Pearson r = {_r_pearson:.2f}** — moderate correlation. "
+                    "The two components share some information but are not redundant. "
+                    "The 60/40 split is a reasonable blend."
+                )
+            else:
+                _corr_msg = (
+                    f"**Pearson r = {_r_pearson:.2f}** — the two components are "
+                    "**strongly correlated**: areas with many events also tend to have "
+                    "higher convergence. The exact weight split matters less in this case."
+                )
+            st.info(_corr_msg)
+
+            # ── Stability conclusion from Spearman sweep ─────────────────────
+            _baseline_w = 0.60
+            _bs = _baseline_w * _risk_df["convergence_rate"] + (1 - _baseline_w) * _risk_df["freq_score"]
+            _rho_0   = _bs.corr(_risk_df["freq_score"],        method="spearman")   # w=0
+            _rho_100 = _bs.corr(_risk_df["convergence_rate"],  method="spearman")   # w=1
+            _min_rho = min(_rho_0, _rho_100)
+
+            if _min_rho >= 0.90:
+                _stab_msg = (
+                    f"Rank stability is **high** (ρ ≥ {_min_rho:.2f} even at the extremes). "
+                    "Area rankings barely change across the full weight sweep — the 60/40 "
+                    "choice is well-justified and can be kept as-is."
+                )
+                _stab_color = "success"
+            elif _min_rho >= 0.75:
+                _stab_msg = (
+                    f"Rank stability is **moderate** (ρ ≥ {_min_rho:.2f}). "
+                    "Most area rankings are preserved, but a few areas shift meaningfully "
+                    "near the extremes. The 60/40 split is reasonable but not critical."
+                )
+                _stab_color = "warning"
+            else:
+                _stab_msg = (
+                    f"Rank stability is **low** (ρ drops to {_min_rho:.2f}). "
+                    "Area rankings change significantly with different weights. "
+                    "Consider domain expertise or regression-derived weights."
+                )
+                _stab_color = "error"
+
+            getattr(st, _stab_color)(_stab_msg)
+
+            # ── Charts side by side ──────────────────────────────────────────
+            _vc_left, _vc_right = st.columns(2)
+            with _vc_left:
+                st.plotly_chart(
+                    risk_correlation_chart(_risk_df),
+                    use_container_width=True,
+                    key="risk_corr_chart",
+                )
+                st.caption(
+                    "Each bubble is one area. Size = number of pre-alerts. "
+                    "Colour = risk score (red = high). "
+                    "Pearson r measures how correlated the two risk components are."
+                )
+            with _vc_right:
+                st.plotly_chart(
+                    risk_sensitivity_chart(_risk_df),
+                    use_container_width=True,
+                    key="risk_sens_chart",
+                )
+                st.caption(
+                    "Spearman ρ vs the 60/40 baseline as the convergence-rate weight "
+                    "sweeps from 0 % to 100 %. "
+                    "Green band = stable zone (ρ ≥ 0.90)."
+                )
 
     # ── Raw data table ────────────────────────────────────────────────────────
     with st.expander("Raw data (filtered)"):

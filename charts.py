@@ -623,6 +623,118 @@ def siren_heatmap_chart(counts_df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def risk_correlation_chart(summary_df: pd.DataFrame) -> go.Figure:
+    """
+    Scatter plot: event frequency score (x) vs convergence rate (y) per area.
+    Bubble size ∝ n_pre_alerts.  Colour = current 60/40 risk score.
+    Pearson r between the two components is shown in the title.
+
+    Interpretation: high r → the two signals are redundant (weights barely
+    matter); low r → they capture independent dimensions (weights matter more).
+    """
+    if summary_df.empty or len(summary_df) < 3:
+        return _empty_figure("Not enough areas for correlation analysis (need ≥ 3)")
+
+    df = summary_df.copy()
+    df["risk_score"] = (
+        (0.6 * df["convergence_rate"] + 0.4 * df["freq_score"]) * 100
+    ).round(1)
+
+    r = df["freq_score"].corr(df["convergence_rate"])   # Pearson r (pandas default)
+
+    fig = px.scatter(
+        df,
+        x="freq_score",
+        y="convergence_rate",
+        size="n_pre_alerts",
+        color="risk_score",
+        hover_name="area",
+        hover_data={
+            "n_pre_alerts": True,
+            "n_sirens": True,
+            "freq_score": ":.3f",
+            "convergence_rate": ":.2f",
+            "risk_score": ":.0f",
+        },
+        color_continuous_scale="RdYlGn_r",
+        range_color=[0, 100],
+        title=f"Event Frequency vs Convergence Rate — Pearson r = {r:.2f}",
+        labels={
+            "freq_score": "Event Frequency score (pre-alerts / day, capped at 1)",
+            "convergence_rate": "Convergence Rate (0 – 1)",
+            "risk_score": "Risk Score (60/40)",
+        },
+        template=_PLOTLY_TEMPLATE,
+    )
+    fig.update_layout(
+        height=460,
+        coloraxis_colorbar=dict(title="Risk", thickness=14, len=0.7),
+    )
+    return fig
+
+
+def risk_sensitivity_chart(summary_df: pd.DataFrame) -> go.Figure:
+    """
+    Line chart of Spearman rank-correlation (ρ) between the area ranking at
+    each convergence-rate weight (0 % … 100 %) and the baseline 60/40 ranking.
+
+    High ρ across the full sweep → the ranking is stable regardless of the
+    exact weight choice.  A dip below ~0.90 signals that the ordering is
+    sensitive to the weight and the 60/40 choice matters more.
+    """
+    if summary_df.empty or len(summary_df) < 3:
+        return _empty_figure("Not enough areas for sensitivity analysis (need ≥ 3)")
+
+    df = summary_df.copy()
+    baseline_w = 0.60
+    baseline_scores = (
+        baseline_w * df["convergence_rate"]
+        + (1 - baseline_w) * df["freq_score"]
+    )
+
+    weights = [w / 100 for w in range(0, 101, 5)]   # 0.00 … 1.00 in steps of 0.05
+    rhos = []
+    for w in weights:
+        scores = w * df["convergence_rate"] + (1 - w) * df["freq_score"]
+        rho = baseline_scores.corr(scores, method="spearman")
+        rhos.append(rho)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=[w * 100 for w in weights],
+        y=rhos,
+        mode="lines+markers",
+        line=dict(color="#ffd166", width=2),
+        marker=dict(size=7),
+        name="Spearman ρ vs 60/40 baseline",
+        hovertemplate="Conv. weight = %{x}%<br>ρ = %{y:.3f}<extra></extra>",
+    ))
+    fig.add_vline(
+        x=60,
+        line_dash="dash",
+        line_color="#e63946",
+        annotation_text="Current (60 / 40)",
+        annotation_position="top right",
+    )
+    fig.add_hrect(
+        y0=0.90,
+        y1=1.02,
+        fillcolor="rgba(45,198,83,0.08)",
+        line_width=0,
+        annotation_text="Stable zone (ρ ≥ 0.90)",
+        annotation_position="top left",
+    )
+    fig.update_layout(
+        template=_PLOTLY_TEMPLATE,
+        title="Rank Stability: how much does the weight choice affect area rankings?",
+        xaxis_title="Convergence-rate weight (%)",
+        yaxis_title="Spearman ρ vs 60/40 baseline",
+        yaxis=dict(range=[max(0.0, min(rhos) - 0.05), 1.02]),
+        height=360,
+    )
+    return fig
+
+
 def _empty_figure(message: str) -> go.Figure:
     fig = go.Figure()
     fig.add_annotation(
