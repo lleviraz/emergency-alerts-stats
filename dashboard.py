@@ -581,10 +581,8 @@ with tab_area:
                     _risk_icon, _risk_label = "🟢", "Low"
                 elif _risk_score < 45:
                     _risk_icon, _risk_label = "🟡", "Moderate"
-                elif _risk_score < 70:
-                    _risk_icon, _risk_label = "🟠", "High"
                 else:
-                    _risk_icon, _risk_label = "🔴", "Critical"
+                    _risk_icon, _risk_label = "🟠", "High"
 
                 # Build readable convergence sentence
                 if _sum_conv is not None and _sum_conv > 0 and _sum_n_pa > 0:
@@ -613,20 +611,13 @@ with tab_area:
                         )
                     with _col_risk:
                         st.markdown(
-                            f"**Risk level**  \n"
+                            f"**Activity Level**  \n"
                             f"## {_risk_icon} {_risk_label}",
                             help=(
-                                f"Composite score: **{_risk_score} / 100**  \n"
-                                "**Formula:** 60 % × convergence rate + 40 % × event frequency  \n"
-                                "• Convergence rate — how reliably pre-alerts lead to sirens  \n"
-                                "• Event frequency — pre-alerts per day (capped at 1)  \n\n"
-                                "The 60 / 40 split was validated in the **Overview → "
-                                "🔬 Risk Score Weight Validation** panel using a "
-                                "Pearson correlation check (are the two components independent?) "
-                                "and a Spearman rank-stability sweep (does changing the weight "
-                                "re-order the areas significantly?).  \n\n"
-                                "Thresholds: 🟢 Low < 20 · 🟡 Moderate 20–44 · "
-                                "🟠 High 45–69 · 🔴 Critical ≥ 70."
+                                f"Score **{_risk_score} / 100** — "
+                                "60% convergence rate + 40% event frequency "
+                                "(pre-alerts per day, capped at 1).  \n"
+                                "🟢 Low < 20 · 🟡 Moderate 20–44 · 🟠 High ≥ 45"
                             ),
                         )
             elif not model_ready:
@@ -1027,10 +1018,12 @@ with tab_overview:
             st.info(_corr_msg)
 
             # ── Stability conclusion from Spearman sweep ─────────────────────
+            # Spearman ρ = Pearson r of ranks — no scipy needed.
             _baseline_w = 0.60
             _bs = _baseline_w * _risk_df["convergence_rate"] + (1 - _baseline_w) * _risk_df["freq_score"]
-            _rho_0   = _bs.corr(_risk_df["freq_score"],        method="spearman")   # w=0
-            _rho_100 = _bs.corr(_risk_df["convergence_rate"],  method="spearman")   # w=1
+            _bs_ranks = _bs.rank()
+            _rho_0   = _bs_ranks.corr(_risk_df["freq_score"].rank())        # w=0
+            _rho_100 = _bs_ranks.corr(_risk_df["convergence_rate"].rank())  # w=1
             _min_rho = min(_rho_0, _rho_100)
 
             if _min_rho >= 0.90:
@@ -1044,7 +1037,7 @@ with tab_overview:
                 _stab_msg = (
                     f"Rank stability is **moderate** (ρ ≥ {_min_rho:.2f}). "
                     "Most area rankings are preserved, but a few areas shift meaningfully "
-                    "near the extremes. The 60/40 split is reasonable but not critical."
+                    "near the extremes. The 60/40 split is reasonable."
                 )
                 _stab_color = "warning"
             else:
