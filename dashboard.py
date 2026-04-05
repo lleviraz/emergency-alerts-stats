@@ -706,51 +706,83 @@ with tab_area:
                             f" &nbsp;·&nbsp; P(siren): "
                             f'<span style="color:{clr};font-weight:bold;font-size:1.1em">{pct}</span>'
                         )
+                    # Predicted-time marker position on the bar (% of max window)
+                    _pred_pct = min(96.0, pred_ms / max_ms * 100)
+                    _max_min  = _wm * 2
                     timer_html = f"""
-                    <div style="font-family:monospace;text-align:center;padding:16px;
+                    <div style="font-family:monospace;text-align:center;padding:16px 20px;
                                 border-radius:12px;border:1px solid #444;background:#0e1117;">
-                      <div id="tmr-label" style="font-size:1em;color:#aaa;margin-bottom:8px;
+
+                      <!-- status label -->
+                      <div id="tmr-label" style="font-size:0.85em;color:#aaa;margin-bottom:10px;
                                   text-transform:uppercase;letter-spacing:2px;">
                         Time since pre-alert{p_siren_html}
                       </div>
-                      <div id="tmr" style="font-size:5em;font-weight:bold;padding:12px 32px;
-                           border-radius:10px;display:inline-block;min-width:200px;
-                           transition:background-color 0.8s ease;color:#fff;">0:00</div>
-                      <div style="margin-top:10px;color:#aaa;font-size:1em;">
-                        Predicted: <span style="color:#ffd166;font-weight:bold">{predicted:.1f} min</span>
-                        &nbsp;·&nbsp; Auto-ends at <span style="color:#aaa">{_wm * 2} min</span>
+
+                      <!-- clock -->
+                      <div id="tmr" style="font-size:4.2em;font-weight:bold;padding:8px 28px;
+                           border-radius:10px;display:inline-block;min-width:180px;
+                           transition:background-color 0.5s ease;color:#fff;">0:00</div>
+
+                      <!-- progress bar -->
+                      <div style="position:relative;width:100%;height:22px;background:#1a1d27;
+                                  border-radius:11px;overflow:visible;margin-top:16px;">
+                        <!-- coloured fill -->
+                        <div id="prog" style="position:absolute;top:0;left:0;height:100%;width:0%;
+                             background:#2dc653;border-radius:11px;
+                             transition:width 0.5s linear,background-color 0.5s ease;"></div>
+                        <!-- predicted-time tick -->
+                        <div style="position:absolute;top:-4px;left:{_pred_pct:.1f}%;
+                                    width:3px;height:30px;background:#ffd166;border-radius:2px;
+                                    box-shadow:0 0 6px #ffd166;"></div>
                       </div>
+
+                      <!-- bar axis labels -->
+                      <div style="position:relative;width:100%;margin-top:5px;
+                                  font-size:0.72em;color:#666;">
+                        <span style="float:left;">0</span>
+                        <span style="position:absolute;left:{_pred_pct:.1f}%;
+                                     transform:translateX(-50%);color:#ffd166;white-space:nowrap;">
+                          ▲ {predicted:.1f} min
+                        </span>
+                        <span style="float:right;color:#888;">{_max_min} min</span>
+                      </div>
+
                     </div>
                     <script>
                       (function(){{
                         var startMs={start_ms}, predMs={pred_ms}, maxMs={max_ms};
-                        var el=document.getElementById('tmr');
-                        var lbl=document.getElementById('tmr-label');
-                        function timerColor(e){{
-                          var r=e/predMs;
-                          if(r<0.5)  return '#2dc653';
-                          if(r<0.8)  return '#ffd166';
-                          if(r<1.0)  return '#f4a261';
-                          if(r<1.35) return '#e63946';
+                        var el  = document.getElementById('tmr');
+                        var lbl = document.getElementById('tmr-label');
+                        var prg = document.getElementById('prog');
+                        function zoneColor(e){{
+                          var r = e / predMs;
+                          if(r < 0.5)  return '#2dc653';
+                          if(r < 0.8)  return '#ffd166';
+                          if(r < 1.0)  return '#f4a261';
+                          if(r < 1.35) return '#e63946';
                           return '#c0392b';
                         }}
                         function tick(){{
-                          var e=Date.now()-startMs;
-                          if(e>=maxMs){{
-                            el.textContent='--:--';
-                            el.style.backgroundColor='#333';
-                            if(lbl) lbl.textContent='MAX WINDOW ELAPSED \u2014 interact with the page to end';
+                          var e = Date.now() - startMs;
+                          if(e >= maxMs){{
+                            el.textContent  = '--:--';
+                            el.style.backgroundColor = '#2a2a2a';
+                            if(prg){{ prg.style.width = '100%'; prg.style.background = '#444'; }}
+                            if(lbl) lbl.textContent = 'MAX WINDOW REACHED \u2014 interact with the page to end';
                             return;
                           }}
-                          var s=Math.floor(e/1000);
-                          el.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
-                          el.style.backgroundColor=timerColor(e);
+                          var s   = Math.floor(e / 1000);
+                          var col = zoneColor(e);
+                          el.textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+                          el.style.backgroundColor = col;
+                          if(prg){{ prg.style.width = (e/maxMs*100)+'%'; prg.style.background = col; }}
                         }}
-                        tick(); setInterval(tick,500);
+                        tick(); setInterval(tick, 500);
                       }})();
                     </script>
                     """
-                    components.html(timer_html, height=200)
+                    components.html(timer_html, height=230)
 
                 if model_ready and predicted is not None:
                     st.error(
