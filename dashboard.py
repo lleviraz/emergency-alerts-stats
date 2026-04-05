@@ -524,10 +524,15 @@ tab_area, tab_overview, tab_compare = st.tabs(["📍 Area Analysis", "📊 Overv
 with tab_area:
 
     if not area_active:
-        st.info(
-            "Select an **area** in the sidebar to see timing statistics and "
-            "pre-alert → siren analytics for that location."
-        )
+        with st.container(border=True):
+            st.markdown("### 👋 Getting started")
+            st.markdown(
+                "**Step 1 →** Pick an area from the **Area** drop-down in the sidebar.  \n"
+                "**Step 2 →** Click **🧠 Train models** in the sidebar to enable timing "
+                "predictions and the live simulation timer.  \n"
+                "**Step 3 →** Press **🚨 Simulate a pre-alert event now** to start a "
+                "colour-coded elapsed-time display based on that area's historical statistics."
+            )
         st.subheader("Daily Pre-Alerts vs Sirens (all areas)")
         daily_ps = daily_pre_alert_siren_counts(df)
         st.plotly_chart(daily_pre_alert_siren_chart(daily_ps), width="stretch", key="daily_ps_all")
@@ -538,12 +543,88 @@ with tab_area:
         if df_area.empty:
             st.warning(f"No events found for **{selected_area}** in the selected time range.")
         else:
-            # ── Pre-alert now button ────────────────────────────────────────
+            # ── Model state ─────────────────────────────────────────────────
             ms = st.session_state["model_state"]
             cs = st.session_state["classifier_state"]
             model_ready = ms is not None and ms.get("location") == selected_area
             classifier_ready = cs is not None and cs.get("location") == selected_area
             alert_active_now = st.session_state["alert_active"]
+
+            # ── Area summary card / onboarding prompt ───────────────────────
+            # Compute stats from the date-filtered area data so the summary
+            # always reflects the currently selected time range.
+            _n_days = max(1, (end_date - start_date).days + 1)
+            _sum_t   = _cached_area_timings(df_area, selected_area)
+            _sum_n_pa   = _sum_t.get("n_pre_alerts", 0)
+            _sum_n_sir  = _sum_t.get("n_sirens", 0)
+            _sum_conv   = _sum_t.get("convergence_rate")      # may be None
+            _sum_avg    = _sum_t.get("avg_pre_to_siren_min")  # may be None
+
+            if model_ready and not alert_active_now:
+                # ── Natural-language summary + risk score ───────────────────
+                _freq_score = min(1.0, _sum_n_pa / _n_days)
+                _conv_val   = _sum_conv if _sum_conv is not None else 0.0
+                _risk_score = (
+                    round((0.6 * _conv_val + 0.4 * _freq_score) * 100)
+                    if _sum_n_pa > 0 else None
+                )
+                if _risk_score is None:
+                    _risk_icon, _risk_label = "⚪", "N/A"
+                elif _risk_score < 20:
+                    _risk_icon, _risk_label = "🟢", "Low"
+                elif _risk_score < 45:
+                    _risk_icon, _risk_label = "🟡", "Moderate"
+                elif _risk_score < 70:
+                    _risk_icon, _risk_label = "🟠", "High"
+                else:
+                    _risk_icon, _risk_label = "🔴", "Critical"
+
+                # Build readable convergence sentence
+                if _sum_conv is not None and _sum_conv > 0 and _sum_n_pa > 0:
+                    _ratio = round(1 / _sum_conv)
+                    _conv_sentence = (
+                        f"About **1 in every {_ratio}** pre-alerts led to a siren "
+                        f"within 15 minutes (**{_sum_conv * 100:.0f}% convergence rate**)"
+                    )
+                    if _sum_avg is not None:
+                        _conv_sentence += f", with an average lead time of **{_sum_avg:.1f} min**."
+                    else:
+                        _conv_sentence += "."
+                elif _sum_conv == 0.0:
+                    _conv_sentence = "None of the pre-alerts in this period led to a siren within 15 minutes."
+                else:
+                    _conv_sentence = "No pre-alerts recorded in this period."
+
+                with st.container(border=True):
+                    _col_txt, _col_risk = st.columns([3, 1])
+                    with _col_txt:
+                        st.markdown(
+                            f"**{selected_area}** — last **{_n_days} days**  \n"
+                            f"📢 **{_sum_n_pa:,}** pre-alerts &nbsp;·&nbsp; "
+                            f"🚨 **{_sum_n_sir:,}** sirens  \n"
+                            + _conv_sentence
+                        )
+                    with _col_risk:
+                        st.markdown(
+                            f"**Risk level**  \n"
+                            f"## {_risk_icon} {_risk_label}",
+                            help=(
+                                f"Composite score: **{_risk_score}/100**  \n"
+                                "60% weight → convergence rate (how reliably pre-alerts "
+                                "lead to sirens).  \n"
+                                "40% weight → event frequency (pre-alerts per day vs the "
+                                "selected time window).  \n"
+                                "Interpretation: Low < 20 · Moderate 20–44 · "
+                                "High 45–69 · Critical ≥ 70."
+                            ),
+                        )
+            elif not model_ready:
+                # ── Onboarding prompt (model not yet trained) ───────────────
+                st.info(
+                    f"📊 **{selected_area}** is selected.  \n"
+                    "Click **🧠 Train models** in the sidebar to enable timing "
+                    "predictions, the live simulation timer, and the area risk summary."
+                )
 
             if not alert_active_now:
                 if st.button(
