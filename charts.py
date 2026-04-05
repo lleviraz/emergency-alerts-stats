@@ -649,13 +649,8 @@ def risk_correlation_chart(summary_df: pd.DataFrame) -> go.Figure:
         size="n_pre_alerts",
         color="risk_score",
         hover_name="area",
-        hover_data={
-            "n_pre_alerts": True,
-            "n_sirens": True,
-            "freq_score": ":.3f",
-            "convergence_rate": ":.2f",
-            "risk_score": ":.0f",
-        },
+        hover_data={"n_pre_alerts": True, "n_sirens": True,
+                    "freq_score": True, "convergence_rate": True, "risk_score": True},
         color_continuous_scale="RdYlGn_r",
         range_color=[0, 100],
         title=f"Event Frequency vs Convergence Rate — Pearson r = {r:.2f}",
@@ -693,10 +688,12 @@ def risk_sensitivity_chart(summary_df: pd.DataFrame) -> go.Figure:
     )
 
     weights = [w / 100 for w in range(0, 101, 5)]   # 0.00 … 1.00 in steps of 0.05
+    # Spearman ρ = Pearson r of ranks — no scipy dependency needed.
+    baseline_ranks = baseline_scores.rank()
     rhos = []
     for w in weights:
         scores = w * df["convergence_rate"] + (1 - w) * df["freq_score"]
-        rho = baseline_scores.corr(scores, method="spearman")
+        rho = baseline_ranks.corr(scores.rank())   # Pearson of ranks = Spearman ρ
         rhos.append(rho)
 
     fig = go.Figure()
