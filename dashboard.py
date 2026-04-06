@@ -584,15 +584,14 @@ with tab_area:
                 else:
                     _conv_sentence = "No pre-alerts recorded in this period."
 
-                # ── Global context for mini-bars ────────────────────────────
+                # ── Cross-area context (same date window as the card) ───────
+                # Using df (date-filtered) so daily rates are comparable.
                 _pa_per_day  = _sum_n_pa  / _n_days
                 _sir_per_day = _sum_n_sir / _n_days
 
-                _all_smry = _cached_all_areas_risk_summary(df_full)
-                if not _all_smry.empty:
-                    _smry_days = _all_smry["n_days"].iloc[0]  # same span for all rows
-                    _g_max_pa_rate  = max(0.01, (_all_smry["n_pre_alerts"] / _smry_days).max())
-                    _g_max_sir_rate = max(0.01, (_all_smry["n_sirens"]     / _smry_days).max())
+                _all_smry = _cached_all_areas_risk_summary(df)
+                if not _all_smry.empty and _all_smry["n_days"].iloc[0] > 0:
+                    _smry_days = _all_smry["n_days"].iloc[0]
                     _top_act  = _all_smry.loc[_all_smry["n_pre_alerts"].idxmax()]
                     # Highest convergence: only areas with ≥20 pre-alerts (avoid flukes)
                     _conv_pool = _all_smry[_all_smry["n_pre_alerts"] >= 20]
@@ -601,15 +600,19 @@ with tab_area:
                         if not _conv_pool.empty
                         else _all_smry.loc[_all_smry["convergence_rate"].idxmax()]
                     )
+                    _ta_name = str(_top_act["area"])
+                    _ta_rate = float(_top_act["n_pre_alerts"]) / _smry_days
+                    _tc_name = str(_top_conv["area"])
+                    _tc_rate = float(_top_conv["convergence_rate"]) * 100
+                    _ref_caption = (
+                        f"Most active: **{_ta_name}** ({_ta_rate:.1f}/day)  \n"
+                        f"Highest conv ⚠️: **{_tc_name}** ({_tc_rate:.0f}%)"
+                    )
                 else:
-                    _g_max_pa_rate = _g_max_sir_rate = max(0.01, _pa_per_day, _sir_per_day)
-                    _top_act = _top_conv = None
-
-                _pa_pct  = min(100, int(_pa_per_day  / _g_max_pa_rate  * 100))
-                _sir_pct = min(100, int(_sir_per_day / _g_max_sir_rate * 100))
+                    _ref_caption = None
 
                 with st.container(border=True):
-                    _col_txt, _col_bars = st.columns([3, 2])
+                    _col_txt, _col_rates = st.columns([3, 2])
                     with _col_txt:
                         st.markdown(
                             f"**{selected_area}** — last **{_n_days} days**  \n"
@@ -617,20 +620,13 @@ with tab_area:
                             f"🚨 **{_sum_n_sir:,}** sirens  \n"
                             + _conv_sentence
                         )
-                    with _col_bars:
-                        st.caption(f"📢 Pre-alerts: **{_pa_per_day:.1f} / day**")
-                        st.progress(_pa_pct)
-                        st.caption(f"🚨 Sirens: **{_sir_per_day:.1f} / day**")
-                        st.progress(_sir_pct)
-                        if _top_act is not None:
-                            _ta_name  = str(_top_act["area"])
-                            _ta_rate  = float(_top_act["n_pre_alerts"]) / _smry_days
-                            _tc_name  = str(_top_conv["area"])
-                            _tc_rate  = float(_top_conv["convergence_rate"]) * 100
-                            st.caption(
-                                f"Most active: **{_ta_name}** ({_ta_rate:.1f}/day)  \n"
-                                f"Highest conv ⚠️: **{_tc_name}** ({_tc_rate:.0f}%)"
-                            )
+                    with _col_rates:
+                        st.markdown(
+                            f"📢 **{_pa_per_day:.1f}** pre-alerts / day  \n"
+                            f"🚨 **{_sir_per_day:.1f}** sirens / day"
+                        )
+                        if _ref_caption:
+                            st.caption(_ref_caption)
             elif not model_ready:
                 # ── Onboarding prompt (model not yet trained) ───────────────
                 st.info(
