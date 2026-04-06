@@ -568,23 +568,7 @@ with tab_area:
             _sum_avg    = _sum_t.get("avg_pre_to_siren_min")  # may be None
 
             if model_ready and not alert_active_now:
-                # ── Natural-language summary + risk score ───────────────────
-                _freq_score = min(1.0, _sum_n_pa / _n_days)
-                _conv_val   = _sum_conv if _sum_conv is not None else 0.0
-                _risk_score = (
-                    round((0.6 * _conv_val + 0.4 * _freq_score) * 100)
-                    if _sum_n_pa > 0 else None
-                )
-                if _risk_score is None:
-                    _risk_icon, _risk_label = "⚪", "N/A"
-                elif _risk_score < 20:
-                    _risk_icon, _risk_label = "🟢", "Low"
-                elif _risk_score < 45:
-                    _risk_icon, _risk_label = "🟡", "Moderate"
-                else:
-                    _risk_icon, _risk_label = "🟠", "High"
-
-                # Build readable convergence sentence
+                # ── Build readable convergence sentence ─────────────────────
                 if _sum_conv is not None and _sum_conv > 0 and _sum_n_pa > 0:
                     _ratio = round(1 / _sum_conv)
                     _conv_sentence = (
@@ -600,8 +584,22 @@ with tab_area:
                 else:
                     _conv_sentence = "No pre-alerts recorded in this period."
 
+                # ── Global context for mini-bars ────────────────────────────
+                _all_smry = _cached_all_areas_risk_summary(df_full)
+                if not _all_smry.empty:
+                    _g_max_pa  = max(1, int(_all_smry["n_pre_alerts"].max()))
+                    _g_max_sir = max(1, int(_all_smry["n_sirens"].max()))
+                    _top_act   = _all_smry.loc[_all_smry["n_pre_alerts"].idxmax()]
+                    _top_conv  = _all_smry.loc[_all_smry["convergence_rate"].idxmax()]
+                else:
+                    _g_max_pa = _g_max_sir = max(1, _sum_n_pa, _sum_n_sir)
+                    _top_act = _top_conv = None
+
+                _pa_pct  = min(100, int(_sum_n_pa  / _g_max_pa  * 100))
+                _sir_pct = min(100, int(_sum_n_sir / _g_max_sir * 100))
+
                 with st.container(border=True):
-                    _col_txt, _col_risk = st.columns([3, 1])
+                    _col_txt, _col_bars = st.columns([3, 2])
                     with _col_txt:
                         st.markdown(
                             f"**{selected_area}** — last **{_n_days} days**  \n"
@@ -609,17 +607,21 @@ with tab_area:
                             f"🚨 **{_sum_n_sir:,}** sirens  \n"
                             + _conv_sentence
                         )
-                    with _col_risk:
-                        st.markdown(
-                            f"**Activity Level**  \n"
-                            f"## {_risk_icon} {_risk_label}",
-                            help=(
-                                f"Score **{_risk_score} / 100** — "
-                                "60% convergence rate + 40% event frequency "
-                                "(pre-alerts per day, capped at 1).  \n"
-                                "🟢 Low < 20 · 🟡 Moderate 20–44 · 🟠 High ≥ 45"
-                            ),
-                        )
+                    with _col_bars:
+                        st.caption(f"📢 Pre-alerts: **{_sum_n_pa}**")
+                        st.progress(_pa_pct,
+                            text=f"{_pa_pct}% of area max ({_g_max_pa})" if _pa_pct < 100 else "highest in dataset")
+                        st.caption(f"🚨 Sirens: **{_sum_n_sir}**")
+                        st.progress(_sir_pct,
+                            text=f"{_sir_pct}% of area max ({_g_max_sir})" if _sir_pct < 100 else "highest in dataset")
+                        if _top_act is not None:
+                            _ta_name = str(_top_act["area"])
+                            _tc_name = str(_top_conv["area"])
+                            _tc_rate = float(_top_conv["convergence_rate"]) * 100
+                            st.caption(
+                                f"Most active: **{_ta_name}** ({int(_top_act['n_pre_alerts'])} pre-alerts)  \n"
+                                f"Best conv: **{_tc_name}** ({_tc_rate:.0f}%)"
+                            )
             elif not model_ready:
                 # ── Onboarding prompt (model not yet trained) ───────────────
                 st.info(
@@ -664,17 +666,20 @@ with tab_area:
                 if not model_ready:
                     st.caption("⚠️ Train the models in the sidebar for predictions.")
                 else:
-                    _wm = ms.get("window_minutes", 15)
+                    _wm       = ms.get("window_minutes", 15)
+                    _hist_avg = ms.get("historical_avg_min") or _wm
+                    _auto_min = _hist_avg + 10
                     st.caption(
                         f"Visual timer only — not a real alert system. "
-                        f"Colours reflect the area's historical statistics (match window: {_wm} min). "
-                        f"Auto-ends after {_wm * 2} min."
+                        f"Auto-ends {_auto_min:.0f} min from start "
+                        f"(mean {_hist_avg:.1f} min + 10 min buffer)."
                     )
             else:
-                # ── Auto-end if 2× the match window has elapsed ─────────────
+                # ── Auto-end at historical mean + 10 min ────────────────────
                 started_at = st.session_state["alert_started_at"]
-                _wm = ms.get("window_minutes", 15) if ms else 15
-                _auto_end_s = _wm * 2 * 60
+                _wm       = ms.get("window_minutes", 15) if ms else 15
+                _hist_avg = (ms.get("historical_avg_min") or _wm) if ms else _wm
+                _auto_end_s = int((_hist_avg + 10) * 60)
                 if started_at is not None:
                     _elapsed_s = (datetime.now() - started_at).total_seconds()
                     if _elapsed_s >= _auto_end_s:
@@ -706,9 +711,14 @@ with tab_area:
                             f" &nbsp;·&nbsp; P(siren): "
                             f'<span style="color:{clr};font-weight:bold;font-size:1.1em">{pct}</span>'
                         )
-                    # Predicted-time marker position on the bar (% of max window)
-                    _pred_pct = min(96.0, pred_ms / max_ms * 100)
-                    _max_min  = _wm * 2
+                    # Zone-boundary positions as % of bar width
+                    def _bar_pct(ms_val):
+                        return round(min(98.5, ms_val / max_ms * 100), 1)
+                    _p50  = _bar_pct(pred_ms * 0.50)   # green → yellow
+                    _p80  = _bar_pct(pred_ms * 0.80)   # yellow → orange
+                    _p100 = _bar_pct(pred_ms * 1.00)   # orange → red  (predicted)
+                    _p135 = _bar_pct(pred_ms * 1.35)   # red → dark-red
+                    _auto_min_label = f"{_auto_end_s / 60:.0f}"
                     timer_html = f"""
                     <div style="font-family:monospace;text-align:center;padding:16px 20px;
                                 border-radius:12px;border:1px solid #444;background:#0e1117;">
@@ -731,21 +741,43 @@ with tab_area:
                         <div id="prog" style="position:absolute;top:0;left:0;height:100%;width:0%;
                              background:#2dc653;border-radius:11px;
                              transition:width 0.5s linear,background-color 0.5s ease;"></div>
-                        <!-- predicted-time tick -->
-                        <div style="position:absolute;top:-4px;left:{_pred_pct:.1f}%;
-                                    width:3px;height:30px;background:#ffd166;border-radius:2px;
-                                    box-shadow:0 0 6px #ffd166;"></div>
+                        <!-- green→yellow boundary -->
+                        <div title="50% of predicted — entering caution zone"
+                             style="position:absolute;top:-3px;left:{_p50}%;
+                                    width:2px;height:28px;background:#ffd166;
+                                    opacity:0.5;border-radius:1px;"></div>
+                        <!-- yellow→orange boundary -->
+                        <div title="80% of predicted — approaching"
+                             style="position:absolute;top:-3px;left:{_p80}%;
+                                    width:2px;height:28px;background:#f4a261;
+                                    opacity:0.65;border-radius:1px;"></div>
+                        <!-- predicted time — glowing anchor -->
+                        <div title="Predicted siren time"
+                             style="position:absolute;top:-5px;left:{_p100}%;
+                                    width:3px;height:32px;background:#ffd166;
+                                    border-radius:2px;box-shadow:0 0 7px #ffd166;"></div>
+                        <!-- red→dark-red boundary (only if it fits) -->
+                        {"" if _p135 >= 98 else f'''
+                        <div title="135% of predicted — well past expected"
+                             style="position:absolute;top:-3px;left:{_p135}%;
+                                    width:2px;height:28px;background:#e63946;
+                                    opacity:0.6;border-radius:1px;"></div>'''}
+                        <!-- auto-stop line -->
+                        <div title="Auto-stop"
+                             style="position:absolute;top:-5px;right:1px;
+                                    width:3px;height:32px;background:#888;
+                                    border-radius:2px;border-left:2px dashed #555;"></div>
                       </div>
 
                       <!-- bar axis labels -->
                       <div style="position:relative;width:100%;margin-top:5px;
                                   font-size:0.72em;color:#666;">
                         <span style="float:left;">0</span>
-                        <span style="position:absolute;left:{_pred_pct:.1f}%;
+                        <span style="position:absolute;left:{_p100}%;
                                      transform:translateX(-50%);color:#ffd166;white-space:nowrap;">
                           ▲ {predicted:.1f} min
                         </span>
-                        <span style="float:right;color:#888;">{_max_min} min</span>
+                        <span style="float:right;color:#777;">⏹ {_auto_min_label} min</span>
                       </div>
 
                     </div>
@@ -766,23 +798,23 @@ with tab_area:
                         function tick(){{
                           var e = Date.now() - startMs;
                           if(e >= maxMs){{
-                            el.textContent  = '--:--';
+                            el.textContent = '--:--';
                             el.style.backgroundColor = '#2a2a2a';
-                            if(prg){{ prg.style.width = '100%'; prg.style.background = '#444'; }}
-                            if(lbl) lbl.textContent = 'MAX WINDOW REACHED \u2014 interact with the page to end';
+                            if(prg){{ prg.style.width='100%'; prg.style.background='#444'; }}
+                            if(lbl) lbl.textContent = 'AUTO-STOPPED \u2014 interact with the page to dismiss';
                             return;
                           }}
                           var s   = Math.floor(e / 1000);
                           var col = zoneColor(e);
                           el.textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
                           el.style.backgroundColor = col;
-                          if(prg){{ prg.style.width = (e/maxMs*100)+'%'; prg.style.background = col; }}
+                          if(prg){{ prg.style.width=(e/maxMs*100)+'%'; prg.style.background=col; }}
                         }}
                         tick(); setInterval(tick, 500);
                       }})();
                     </script>
                     """
-                    components.html(timer_html, height=230)
+                    components.html(timer_html, height=240)
 
                 if model_ready and predicted is not None:
                     st.error(
