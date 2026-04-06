@@ -585,18 +585,28 @@ with tab_area:
                     _conv_sentence = "No pre-alerts recorded in this period."
 
                 # ── Global context for mini-bars ────────────────────────────
+                _pa_per_day  = _sum_n_pa  / _n_days
+                _sir_per_day = _sum_n_sir / _n_days
+
                 _all_smry = _cached_all_areas_risk_summary(df_full)
                 if not _all_smry.empty:
-                    _g_max_pa  = max(1, int(_all_smry["n_pre_alerts"].max()))
-                    _g_max_sir = max(1, int(_all_smry["n_sirens"].max()))
-                    _top_act   = _all_smry.loc[_all_smry["n_pre_alerts"].idxmax()]
-                    _top_conv  = _all_smry.loc[_all_smry["convergence_rate"].idxmax()]
+                    _smry_days = _all_smry["n_days"].iloc[0]  # same span for all rows
+                    _g_max_pa_rate  = max(0.01, (_all_smry["n_pre_alerts"] / _smry_days).max())
+                    _g_max_sir_rate = max(0.01, (_all_smry["n_sirens"]     / _smry_days).max())
+                    _top_act  = _all_smry.loc[_all_smry["n_pre_alerts"].idxmax()]
+                    # Highest convergence: only areas with ≥20 pre-alerts (avoid flukes)
+                    _conv_pool = _all_smry[_all_smry["n_pre_alerts"] >= 20]
+                    _top_conv  = (
+                        _conv_pool.loc[_conv_pool["convergence_rate"].idxmax()]
+                        if not _conv_pool.empty
+                        else _all_smry.loc[_all_smry["convergence_rate"].idxmax()]
+                    )
                 else:
-                    _g_max_pa = _g_max_sir = max(1, _sum_n_pa, _sum_n_sir)
+                    _g_max_pa_rate = _g_max_sir_rate = max(0.01, _pa_per_day, _sir_per_day)
                     _top_act = _top_conv = None
 
-                _pa_pct  = min(100, int(_sum_n_pa  / _g_max_pa  * 100))
-                _sir_pct = min(100, int(_sum_n_sir / _g_max_sir * 100))
+                _pa_pct  = min(100, int(_pa_per_day  / _g_max_pa_rate  * 100))
+                _sir_pct = min(100, int(_sir_per_day / _g_max_sir_rate * 100))
 
                 with st.container(border=True):
                     _col_txt, _col_bars = st.columns([3, 2])
@@ -608,19 +618,18 @@ with tab_area:
                             + _conv_sentence
                         )
                     with _col_bars:
-                        st.caption(f"📢 Pre-alerts: **{_sum_n_pa}**")
-                        st.progress(_pa_pct,
-                            text=f"{_pa_pct}% of area max ({_g_max_pa})" if _pa_pct < 100 else "highest in dataset")
-                        st.caption(f"🚨 Sirens: **{_sum_n_sir}**")
-                        st.progress(_sir_pct,
-                            text=f"{_sir_pct}% of area max ({_g_max_sir})" if _sir_pct < 100 else "highest in dataset")
+                        st.caption(f"📢 Pre-alerts: **{_pa_per_day:.1f} / day**")
+                        st.progress(_pa_pct)
+                        st.caption(f"🚨 Sirens: **{_sir_per_day:.1f} / day**")
+                        st.progress(_sir_pct)
                         if _top_act is not None:
-                            _ta_name = str(_top_act["area"])
-                            _tc_name = str(_top_conv["area"])
-                            _tc_rate = float(_top_conv["convergence_rate"]) * 100
+                            _ta_name  = str(_top_act["area"])
+                            _ta_rate  = float(_top_act["n_pre_alerts"]) / _smry_days
+                            _tc_name  = str(_top_conv["area"])
+                            _tc_rate  = float(_top_conv["convergence_rate"]) * 100
                             st.caption(
-                                f"Most active: **{_ta_name}** ({int(_top_act['n_pre_alerts'])} pre-alerts)  \n"
-                                f"Best conv: **{_tc_name}** ({_tc_rate:.0f}%)"
+                                f"Most active: **{_ta_name}** ({_ta_rate:.1f}/day)  \n"
+                                f"Highest conv ⚠️: **{_tc_name}** ({_tc_rate:.0f}%)"
                             )
             elif not model_ready:
                 # ── Onboarding prompt (model not yet trained) ───────────────
