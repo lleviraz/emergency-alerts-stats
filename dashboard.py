@@ -622,15 +622,18 @@ with tab_area:
                         )
                     with _col_rates:
                         def _fmt_rate(r):
-                            """Round to integer; show '< 1' when it would round to zero."""
                             return f"~{round(r)}" if round(r) >= 1 else "< 1"
-                        st.metric(
-                            "📢 Pre-alerts / day", _fmt_rate(_pa_per_day),
-                            help=f"{_pa_per_day:.2f} / day  ({_sum_n_pa} total over {_n_days} days)",
-                        )
-                        st.metric(
-                            "🚨 Sirens / day", _fmt_rate(_sir_per_day),
-                            help=f"{_sir_per_day:.2f} / day  ({_sum_n_sir} total over {_n_days} days)",
+                        def _tip(label, r, total, days):
+                            display = _fmt_rate(r)
+                            tip = f"Exact: {r:.2f} / day ({total} total over {days} days)"
+                            return (
+                                f'<span title="{tip}" style="cursor:help;font-size:0.9em;">'
+                                f"{label} <b>{display}</b> / day</span>"
+                            )
+                        st.markdown(
+                            _tip("📢", _pa_per_day, _sum_n_pa, _n_days) + "<br>" +
+                            _tip("🚨", _sir_per_day, _sum_n_sir, _n_days),
+                            unsafe_allow_html=True,
                         )
                         if _ref_caption:
                             st.caption(_ref_caption)
