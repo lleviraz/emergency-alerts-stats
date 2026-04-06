@@ -621,9 +621,16 @@ with tab_area:
                             + _conv_sentence
                         )
                     with _col_rates:
-                        st.markdown(
-                            f"📢 **{_pa_per_day:.1f}** pre-alerts / day  \n"
-                            f"🚨 **{_sir_per_day:.1f}** sirens / day"
+                        def _fmt_rate(r):
+                            """Round to integer; show '< 1' when it would round to zero."""
+                            return f"~{round(r)}" if round(r) >= 1 else "< 1"
+                        st.metric(
+                            "📢 Pre-alerts / day", _fmt_rate(_pa_per_day),
+                            help=f"{_pa_per_day:.2f} / day  ({_sum_n_pa} total over {_n_days} days)",
+                        )
+                        st.metric(
+                            "🚨 Sirens / day", _fmt_rate(_sir_per_day),
+                            help=f"{_sir_per_day:.2f} / day  ({_sum_n_sir} total over {_n_days} days)",
                         )
                         if _ref_caption:
                             st.caption(_ref_caption)
