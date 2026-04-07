@@ -225,19 +225,30 @@ def category_totals(df: pd.DataFrame) -> pd.DataFrame:
 
 def top_locations(df: pd.DataFrame, n: int = 20) -> pd.DataFrame:
     """
-    Explodes the 'data' field, translates to English, and returns top N
-    locations by event count.
+    Returns top N locations by event count.
+    Uses the pre-translated 'location_en' column if present; falls back to
+    exploding the raw 'data' column and translating on the fly.
     Columns: location (str), count (int).
     """
-    locs = _explode_locations(df["data"].dropna())
-    locs = locs[locs != ""].apply(_translate_location)
-    return (
-        locs.value_counts()
-        .head(n)
-        .reset_index()
-        .rename(columns={"index": "location", "data": "location", "count": "count"})
-        .rename(columns={locs.name if locs.name else "data": "location"})
-    )
+    if "location_en" in df.columns:
+        # location_en may contain comma-separated names (one row = one alert
+        # that spans multiple areas); explode them so each area is counted once.
+        locs = (
+            df["location_en"]
+            .dropna()
+            .str.split(",")
+            .explode()
+            .str.strip()
+        )
+        locs = locs[locs != ""]
+    else:
+        locs = _explode_locations(df["data"].dropna())
+        locs = locs[locs != ""].apply(_translate_location)
+    vc = locs.value_counts().head(n).reset_index()
+    # pandas ≥2.0 names the columns [series_name, "count"]; older versions use
+    # ["index", series_name].  Normalise to ["location", "count"] by position.
+    vc.columns = ["location", "count"]
+    return vc
 
 
 def hourly_heatmap_data(df: pd.DataFrame) -> pd.DataFrame:

@@ -129,6 +129,10 @@ def _cached_convergence_rate(df: pd.DataFrame, area: str) -> pd.DataFrame:
 def _cached_all_areas_risk_summary(df: pd.DataFrame) -> "pd.DataFrame":
     return all_areas_risk_summary(df, window_minutes=15)
 
+@st.cache_data(show_spinner=False)
+def _cached_top_locations(df: pd.DataFrame, n: int) -> "pd.DataFrame":
+    return top_locations(df, n=n)
+
 # ── Session state init ────────────────────────────────────────────────────────
 for _key, _default in [
     ("df", None),
@@ -266,10 +270,11 @@ with st.sidebar:
 
         last_x_days = st.slider(
             "Show last N days",
-            min_value=1,
-            max_value=total_days,
+            min_value=7,
+            max_value=90,
             value=30,
             step=1,
+            key="days_slider_v2",
         )
         start_date = max(min_date, max_date - timedelta(days=last_x_days))
         end_date = max_date
@@ -1019,7 +1024,7 @@ with tab_overview:
                       key="top_n_overview")
     left, right = st.columns([3, 2])
     with left:
-        loc_df = top_locations(df_view, n=top_n)
+        loc_df = _cached_top_locations(df_view, n=top_n)
         st.plotly_chart(top_locations_chart(loc_df), width="stretch", key="top_locations_overview")
     with right:
         cat_df = category_totals(df_view)
@@ -1054,7 +1059,7 @@ with tab_overview:
             "This section checks whether that split is reasonable."
         )
         with st.spinner("Computing per-area stats…"):
-            _risk_df = _cached_all_areas_risk_summary(df_full)
+            _risk_df = _cached_all_areas_risk_summary(df_view)
 
         if _risk_df.empty or len(_risk_df) < 3:
             st.info("Not enough areas with pre-alert data to run the validation.")
