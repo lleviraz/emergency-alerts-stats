@@ -264,22 +264,12 @@ with st.sidebar:
         min_date = df_full["parsed_date"].min().date()
         total_days = (max_date - min_date).days
 
-        DAY_OPTIONS = [7, 14, 30, 60, 90, 180, 365, total_days]
-        DAY_LABELS = {
-            7: "Last 7 days",
-            14: "Last 14 days",
-            30: "Last 30 days",
-            60: "Last 60 days",
-            90: "Last 90 days",
-            180: "Last 6 months",
-            365: "Last year",
-            total_days: "All time",
-        }
-        last_x_days = st.select_slider(
+        last_x_days = st.slider(
             "Show last N days",
-            options=DAY_OPTIONS,
+            min_value=1,
+            max_value=total_days,
             value=30,
-            format_func=lambda v: DAY_LABELS.get(v, f"Last {v} days"),
+            step=1,
         )
         start_date = max(min_date, max_date - timedelta(days=last_x_days))
         end_date = max_date
@@ -442,12 +432,6 @@ with st.sidebar:
             format_func=lambda c: category_options[c],
         )
         include_drills = st.checkbox("Include drill events", value=False)
-
-        st.divider()
-
-        # ── Top N locations ─────────────────────────────────────────────────
-        st.subheader("Top Locations")
-        top_n = st.slider("Show top N locations", min_value=5, max_value=50, value=20, step=5)
 
 # ── Main area ─────────────────────────────────────────────────────────────────
 st.title("🚨 Israel Civil Defense Alerts Dashboard")
@@ -623,16 +607,16 @@ with tab_area:
                     with _col_rates:
                         def _fmt_rate(r):
                             return f"~{round(r)}" if round(r) >= 1 else "< 1"
-                        def _tip(label, r, total, days):
+                        def _tip(icon, name, r, total, days):
                             display = _fmt_rate(r)
                             tip = f"Exact: {r:.2f} / day ({total} total over {days} days)"
                             return (
                                 f'<span title="{tip}" style="cursor:help;font-size:0.9em;">'
-                                f"{label} <b>{display}</b> / day</span>"
+                                f"{icon} {name} <b>{display}</b> / day</span>"
                             )
                         st.markdown(
-                            _tip("📢", _pa_per_day, _sum_n_pa, _n_days) + "<br>" +
-                            _tip("🚨", _sir_per_day, _sum_n_sir, _n_days),
+                            _tip("📢", "Pre-alerts", _pa_per_day, _sum_n_pa, _n_days) + "<br>" +
+                            _tip("🚨", "Sirens", _sir_per_day, _sum_n_sir, _n_days),
                             unsafe_allow_html=True,
                         )
                         if _ref_caption:
@@ -989,9 +973,9 @@ with tab_area:
 # ════════════════════════════════════════════════════════════════════════════
 with tab_overview:
 
-    # Overview is always unfiltered by area
+    # Overview always shows all areas, filtered by the selected date range
     df_view = df
-    df_view_history = df_history
+    df_view_history = df  # use date-filtered df (not full history)
 
     # ── KPI row ─────────────────────────────────────────────────────────────
     kpi = kpi_summary(df_view)
@@ -1031,6 +1015,8 @@ with tab_overview:
     st.plotly_chart(timeline_chart(weekly), width="stretch", key="timeline_overview")
 
     # ── Locations + category breakdown ───────────────────────────────────────
+    top_n = st.slider("Show top N locations", min_value=5, max_value=50, value=20, step=5,
+                      key="top_n_overview")
     left, right = st.columns([3, 2])
     with left:
         loc_df = top_locations(df_view, n=top_n)
