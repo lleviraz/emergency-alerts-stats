@@ -6,6 +6,7 @@ No Streamlit imports here.
 import re
 from datetime import date, datetime, timedelta
 
+import numpy as np
 import pandas as pd
 
 from location_map import LOCATION_MAP
@@ -292,6 +293,26 @@ def filter_by_location(df: pd.DataFrame, location_en: str) -> pd.DataFrame:
     return df[mask]
 
 
+def _bootstrap_ci(
+    values: list, n_boot: int = 500, ci: float = 95
+) -> "tuple[float, float] | tuple[None, None]":
+    """
+    Non-parametric bootstrap confidence interval for the mean.
+    Makes no normality assumption — safe for right-skewed timing data.
+    Returns (lo, hi) rounded to 1 dp, or (None, None) when n < 3.
+    """
+    n = len(values)
+    if n < 3:
+        return (None, None)
+    rng = np.random.default_rng(42)
+    a = np.asarray(values, dtype=float)
+    means = rng.choice(a, size=(n_boot, n), replace=True).mean(axis=1)
+    alpha = (100.0 - ci) / 2.0
+    lo = float(np.percentile(means, alpha))
+    hi = float(np.percentile(means, 100.0 - alpha))
+    return (round(lo, 1), round(hi, 1))
+
+
 def area_timings(
     df: pd.DataFrame,
     location_en: str,
@@ -301,17 +322,22 @@ def area_timings(
     """
     For a given area, compute timing statistics between event types.
 
-    Returns:
-      n_pre_alerts        : total pre-alerts in area
-      n_sirens            : total sirens in area
-      avg_pre_to_siren_min: average minutes from pre-alert to next siren (or None)
-      avg_pre_to_clear_min: average minutes from pre-alert to next all-clear (or None)
-      convergence_rate    : fraction of pre-alerts followed by a siren within window
-      n_converged         : count of pre-alerts that preceded a siren
+    Returns (all timing fields are None when insufficient data):
+      n_pre_alerts            : total pre-alerts in area
+      n_sirens                : total sirens in area
+      convergence_rate        : fraction of pre-alerts followed by siren within window
+      n_converged             : count of pre-alerts that preceded a siren
+      avg_pre_to_siren_min    : mean minutes pre-alert → next siren
+      ci_pre_to_siren_min     : (lo, hi) 95% bootstrap CI, or (None, None)
+      avg_pre_to_clear_min    : mean minutes pre-alert → next release
+      ci_pre_to_clear_min     : (lo, hi) 95% bootstrap CI, or (None, None)
+      avg_siren_to_clear_min  : mean minutes siren → next release
+      ci_siren_to_clear_min   : (lo, hi) 95% bootstrap CI, or (None, None)
+      n_siren_to_clear        : number of siren→release pairs found
 
-    window_minutes      — tolerance for pre-alert → siren pairing (default 15 min)
-    clear_window_minutes — tolerance for pre-alert → all-clear pairing (default 60 min);
-                          wider because all-clears arrive after siren + shelter duration.
+    window_minutes       — tolerance for pre-alert → siren (default 15 min)
+    clear_window_minutes — tolerance for *→release pairings (default 60 min);
+                           wider because releases arrive after siren + shelter.
 
     Uses pd.merge_asof (O(n log n)) instead of iterrows (O(n²)).
     """
@@ -319,35 +345,39 @@ def area_timings(
 
     pre_alerts = (
         area_df[area_df["category"].isin(PRE_ALERT_CATEGORIES)][["parsed_alertDate"]]
-        .dropna()
-        .sort_values("parsed_alertDate")
-        .reset_index(drop=True)
+        .dropna().sort_values("parsed_alertDate").reset_index(drop=True)
     )
     sirens = (
         area_df[area_df["category"].isin(SIREN_CATEGORIES)][["parsed_alertDate"]]
-        .dropna()
-        .sort_values("parsed_alertDate")
-        .reset_index(drop=True)
+        .dropna().sort_values("parsed_alertDate").reset_index(drop=True)
     )
     all_clears = (
         area_df[area_df["category"].isin(ALL_CLEAR_CATEGORIES)][["parsed_alertDate"]]
-        .dropna()
-        .sort_values("parsed_alertDate")
-        .reset_index(drop=True)
+        .dropna().sort_values("parsed_alertDate").reset_index(drop=True)
     )
 
     n_pre = len(pre_alerts)
-    tol = pd.Timedelta(minutes=window_minutes)
+    tol      = pd.Timedelta(minutes=window_minutes)
+    tol_clr  = pd.Timedelta(minutes=clear_window_minutes)
 
-    _empty = {"n_pre_alerts": n_pre, "n_sirens": len(sirens),
-               "avg_pre_to_siren_min": None, "avg_pre_to_clear_min": None,
-               "convergence_rate": None, "n_converged": 0}
+    _none_ci = (None, None)
+    _empty = {
+        "n_pre_alerts": n_pre, "n_sirens": len(sirens),
+        "convergence_rate": None, "n_converged": 0,
+        "avg_pre_to_siren_min": None,   "ci_pre_to_siren_min": _none_ci,
+        "avg_pre_to_clear_min": None,   "ci_pre_to_clear_min": _none_ci,
+        "avg_siren_to_clear_min": None, "ci_siren_to_clear_min": _none_ci,
+        "n_siren_to_clear": 0,
+    }
     if n_pre == 0:
         return _empty
 
     pre_s = pre_alerts.rename(columns={"parsed_alertDate": "pre_time"})
 
     # ── pre-alert → siren ─────────────────────────────────────────────────────
+    n_converged = 0
+    avg_pre_to_siren = None
+    ci_pre_to_siren  = _none_ci
     if not sirens.empty:
         m_s = pd.merge_asof(
             pre_s, sirens.rename(columns={"parsed_alertDate": "siren_time"}),
@@ -356,34 +386,56 @@ def area_timings(
         )
         hit_s = m_s["siren_time"].notna()
         n_converged = int(hit_s.sum())
-        deltas_s = (m_s.loc[hit_s, "siren_time"] - m_s.loc[hit_s, "pre_time"]).dt.total_seconds() / 60
-        avg_siren = float(deltas_s.mean()) if not deltas_s.empty else None
-    else:
-        n_converged, avg_siren = 0, None
+        d_s = (m_s.loc[hit_s, "siren_time"] - m_s.loc[hit_s, "pre_time"]).dt.total_seconds() / 60
+        if not d_s.empty:
+            avg_pre_to_siren = float(d_s.mean())
+            ci_pre_to_siren  = _bootstrap_ci(d_s.tolist())
 
-    # ── pre-alert → all-clear ─────────────────────────────────────────────────
-    # Use a wider window: all-clears arrive after the siren + shelter period,
-    # typically 20–40 min after a pre-alert; 15 min would miss most of them.
-    tol_clear = pd.Timedelta(minutes=clear_window_minutes)
+    # ── pre-alert → release ───────────────────────────────────────────────────
+    avg_pre_to_clear = None
+    ci_pre_to_clear  = _none_ci
     if not all_clears.empty:
         m_c = pd.merge_asof(
             pre_s, all_clears.rename(columns={"parsed_alertDate": "clear_time"}),
             left_on="pre_time", right_on="clear_time",
-            direction="forward", tolerance=tol_clear,
+            direction="forward", tolerance=tol_clr,
         )
         hit_c = m_c["clear_time"].notna()
-        deltas_c = (m_c.loc[hit_c, "clear_time"] - m_c.loc[hit_c, "pre_time"]).dt.total_seconds() / 60
-        avg_clear = float(deltas_c.mean()) if not deltas_c.empty else None
-    else:
-        avg_clear = None
+        d_c = (m_c.loc[hit_c, "clear_time"] - m_c.loc[hit_c, "pre_time"]).dt.total_seconds() / 60
+        if not d_c.empty:
+            avg_pre_to_clear = float(d_c.mean())
+            ci_pre_to_clear  = _bootstrap_ci(d_c.tolist())
+
+    # ── siren → release ───────────────────────────────────────────────────────
+    avg_siren_to_clear = None
+    ci_siren_to_clear  = _none_ci
+    n_siren_to_clear   = 0
+    if not sirens.empty and not all_clears.empty:
+        siren_s = sirens.rename(columns={"parsed_alertDate": "siren_time"})
+        m_sc = pd.merge_asof(
+            siren_s, all_clears.rename(columns={"parsed_alertDate": "clear_time"}),
+            left_on="siren_time", right_on="clear_time",
+            direction="forward", tolerance=tol_clr,
+        )
+        hit_sc = m_sc["clear_time"].notna()
+        n_siren_to_clear = int(hit_sc.sum())
+        d_sc = (m_sc.loc[hit_sc, "clear_time"] - m_sc.loc[hit_sc, "siren_time"]).dt.total_seconds() / 60
+        if not d_sc.empty:
+            avg_siren_to_clear = float(d_sc.mean())
+            ci_siren_to_clear  = _bootstrap_ci(d_sc.tolist())
 
     return {
         "n_pre_alerts": n_pre,
         "n_sirens": len(sirens),
-        "avg_pre_to_siren_min": avg_siren,
-        "avg_pre_to_clear_min": avg_clear,
         "convergence_rate": (n_converged / n_pre) if n_pre > 0 else None,
         "n_converged": n_converged,
+        "avg_pre_to_siren_min":   avg_pre_to_siren,
+        "ci_pre_to_siren_min":    ci_pre_to_siren,
+        "avg_pre_to_clear_min":   avg_pre_to_clear,
+        "ci_pre_to_clear_min":    ci_pre_to_clear,
+        "avg_siren_to_clear_min": avg_siren_to_clear,
+        "ci_siren_to_clear_min":  ci_siren_to_clear,
+        "n_siren_to_clear":       n_siren_to_clear,
     }
 
 

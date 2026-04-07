@@ -880,40 +880,69 @@ with tab_area:
             # ── Timing analytics ────────────────────────────────────────────
             st.subheader("Pre-Alert Timing Analysis")
             with st.spinner("Computing timing statistics…"):
-                timings = area_timings(df_history_area, selected_area, window_minutes=15)
+                timings = area_timings(
+                    df_history_area, selected_area,
+                    window_minutes=15, clear_window_minutes=60,
+                )
 
             if timings["n_pre_alerts"] == 0:
                 st.info("No pre-alerts found for this area in the full dataset.")
             else:
-                t1, t2, t3 = st.columns(3)
+                def _fmt_ci(ci):
+                    lo, hi = ci
+                    if lo is None:
+                        return "n < 3, CI not available"
+                    return f"95% CI: {lo:.1f} – {hi:.1f} min  (bootstrap, non-parametric)"
+
+                t1, t2, t3, t4 = st.columns(4)
 
                 avg_ps = timings["avg_pre_to_siren_min"]
                 t1.metric(
-                    "Avg Pre-Alert → Siren",
+                    "Pre-Alert → Siren",
                     f"{avg_ps:.1f} min" if avg_ps is not None else "N/A",
-                    help="Average minutes from a pre-alert to the next siren (within 15-min window)",
+                    help=(
+                        "Mean minutes from a pre-alert to the next siren "
+                        f"(within {15}-min window, {timings['n_converged']} pairs).  \n"
+                        + _fmt_ci(timings["ci_pre_to_siren_min"])
+                    ),
                 )
 
                 avg_pc = timings["avg_pre_to_clear_min"]
                 t2.metric(
-                    "Avg Pre-Alert → All-Clear",
+                    "Pre-Alert → Release",
                     f"{avg_pc:.1f} min" if avg_pc is not None else "N/A",
-                    help="Average minutes from a pre-alert to the next all-clear (within 15-min window)",
+                    help=(
+                        "Mean minutes from a pre-alert to the next all-clear / release "
+                        "(within 60-min window).  \n"
+                        + _fmt_ci(timings["ci_pre_to_clear_min"])
+                    ),
+                )
+
+                avg_sc = timings["avg_siren_to_clear_min"]
+                t3.metric(
+                    "Siren → Release",
+                    f"{avg_sc:.1f} min" if avg_sc is not None else "N/A",
+                    help=(
+                        "Mean minutes from a siren to the next all-clear / release — "
+                        f"the actual shelter duration ({timings['n_siren_to_clear']} pairs).  \n"
+                        + _fmt_ci(timings["ci_siren_to_clear_min"])
+                    ),
                 )
 
                 rate = timings["convergence_rate"]
-                t3.metric(
+                t4.metric(
                     "Convergence Rate",
                     f"{rate * 100:.1f}%" if rate is not None else "N/A",
                     help=(
                         f"{timings['n_converged']} of {timings['n_pre_alerts']} pre-alerts "
-                        "were followed by an actual siren within 15 minutes"
+                        "were followed by an actual siren within 15 minutes."
                     ),
                 )
 
                 st.caption(
                     f"Based on **{timings['n_pre_alerts']}** pre-alerts and "
-                    f"**{timings['n_sirens']}** sirens in **{selected_area}** (full dataset)."
+                    f"**{timings['n_sirens']}** sirens in **{selected_area}** (full dataset).  "
+                    "Hover each metric for 95% bootstrap CI (distribution-free)."
                 )
 
             st.divider()
@@ -1209,25 +1238,24 @@ with tab_compare:
             rows = []
             for area in compare_areas:
                 t = _cached_area_timings(df_history, area)
+                def _r(v): return round(v, 1) if v is not None else None
+                def _ci_str(ci):
+                    lo, hi = ci
+                    return f"[{lo:.1f}–{hi:.1f}]" if lo is not None else "—"
                 rows.append(
                     {
                         "Area": area,
                         "Pre-Alerts": t["n_pre_alerts"],
                         "Sirens": t["n_sirens"],
-                        "Avg Pre→Siren (min)": (
-                            round(t["avg_pre_to_siren_min"], 1)
-                            if t["avg_pre_to_siren_min"] is not None
-                            else None
-                        ),
-                        "Avg Pre→Clear (min)": (
-                            round(t["avg_pre_to_clear_min"], 1)
-                            if t["avg_pre_to_clear_min"] is not None
-                            else None
-                        ),
+                        "Pre→Siren (min)": _r(t["avg_pre_to_siren_min"]),
+                        "  95% CI": _ci_str(t["ci_pre_to_siren_min"]),
+                        "Pre→Release (min)": _r(t["avg_pre_to_clear_min"]),
+                        " 95% CI": _ci_str(t["ci_pre_to_clear_min"]),
+                        "Siren→Release (min)": _r(t["avg_siren_to_clear_min"]),
+                        "95% CI": _ci_str(t["ci_siren_to_clear_min"]),
                         "Convergence %": (
                             round(t["convergence_rate"] * 100, 1)
-                            if t["convergence_rate"] is not None
-                            else None
+                            if t["convergence_rate"] is not None else None
                         ),
                     }
                 )
