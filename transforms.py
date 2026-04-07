@@ -293,7 +293,10 @@ def filter_by_location(df: pd.DataFrame, location_en: str) -> pd.DataFrame:
 
 
 def area_timings(
-    df: pd.DataFrame, location_en: str, window_minutes: int = 15
+    df: pd.DataFrame,
+    location_en: str,
+    window_minutes: int = 15,
+    clear_window_minutes: int = 60,
 ) -> dict:
     """
     For a given area, compute timing statistics between event types.
@@ -305,6 +308,10 @@ def area_timings(
       avg_pre_to_clear_min: average minutes from pre-alert to next all-clear (or None)
       convergence_rate    : fraction of pre-alerts followed by a siren within window
       n_converged         : count of pre-alerts that preceded a siren
+
+    window_minutes      — tolerance for pre-alert → siren pairing (default 15 min)
+    clear_window_minutes — tolerance for pre-alert → all-clear pairing (default 60 min);
+                          wider because all-clears arrive after siren + shelter duration.
 
     Uses pd.merge_asof (O(n log n)) instead of iterrows (O(n²)).
     """
@@ -355,11 +362,14 @@ def area_timings(
         n_converged, avg_siren = 0, None
 
     # ── pre-alert → all-clear ─────────────────────────────────────────────────
+    # Use a wider window: all-clears arrive after the siren + shelter period,
+    # typically 20–40 min after a pre-alert; 15 min would miss most of them.
+    tol_clear = pd.Timedelta(minutes=clear_window_minutes)
     if not all_clears.empty:
         m_c = pd.merge_asof(
             pre_s, all_clears.rename(columns={"parsed_alertDate": "clear_time"}),
             left_on="pre_time", right_on="clear_time",
-            direction="forward", tolerance=tol,
+            direction="forward", tolerance=tol_clear,
         )
         hit_c = m_c["clear_time"].notna()
         deltas_c = (m_c.loc[hit_c, "clear_time"] - m_c.loc[hit_c, "pre_time"]).dt.total_seconds() / 60

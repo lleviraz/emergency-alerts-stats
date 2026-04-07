@@ -119,7 +119,9 @@ def _cached_download() -> pd.DataFrame:
 # sharing the same data get the result instantly from cache.
 @st.cache_data(show_spinner=False)
 def _cached_area_timings(df: pd.DataFrame, area: str) -> dict:
-    return area_timings(df, area, window_minutes=15)
+    # clear_window_minutes=60: all-clears arrive after siren + shelter period,
+    # so a 15-min window (same as siren pairing) was too tight and understated the average.
+    return area_timings(df, area, window_minutes=15, clear_window_minutes=60)
 
 @st.cache_data(show_spinner=False)
 def _cached_convergence_rate(df: pd.DataFrame, area: str) -> pd.DataFrame:
