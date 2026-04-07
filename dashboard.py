@@ -1025,7 +1025,10 @@ with tab_overview:
     left, right = st.columns([3, 2])
     with left:
         loc_df = _cached_top_locations(df_view, n=top_n)
-        st.plotly_chart(top_locations_chart(loc_df), width="stretch", key="top_locations_overview")
+        st.plotly_chart(
+            top_locations_chart(loc_df, start_date=start_date, end_date=end_date),
+            width="stretch", key="top_locations_overview",
+        )
     with right:
         cat_df = category_totals(df_view)
         st.plotly_chart(

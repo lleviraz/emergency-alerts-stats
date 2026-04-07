@@ -90,17 +90,26 @@ def category_breakdown_chart(cat_totals: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def top_locations_chart(loc_df: pd.DataFrame) -> go.Figure:
+def top_locations_chart(
+    loc_df: pd.DataFrame,
+    start_date=None,
+    end_date=None,
+) -> go.Figure:
     """
     Horizontal bar chart of top N locations.
     loc_df columns: location (or index name), count.
+    Pass start_date / end_date to show the active window in the chart title.
     """
     if loc_df.empty:
         return _empty_figure("No location data")
 
-    # Handle value_counts output — first column is location name
     loc_col = loc_df.columns[0]
-    df = loc_df.sort_values("count", ascending=True)
+    df = loc_df.sort_values("count", ascending=True)  # ascending → top bar renders at top
+
+    if start_date and end_date:
+        title = f"Top Locations by Alert Count  ({start_date} → {end_date})"
+    else:
+        title = "Top Locations by Alert Count"
 
     fig = go.Figure(
         go.Bar(
@@ -113,7 +122,7 @@ def top_locations_chart(loc_df: pd.DataFrame) -> go.Figure:
         )
     )
     fig.update_layout(
-        title="Top Locations by Alert Count",
+        title=title,
         xaxis_title="Events",
         yaxis_title=None,
         template=_PLOTLY_TEMPLATE,
