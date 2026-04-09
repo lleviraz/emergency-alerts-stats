@@ -1280,3 +1280,27 @@ with tab_compare:
             width="stretch",
             key="compare_conv_chart",
         )
+
+# ════════════════════════════════════════════════════════════════════════════
+# FOOTER & ATTRIBUTION
+# ════════════════════════════════════════════════════════════════════════════
+
+st.divider()
+st.markdown(
+    """
+    <div style="text-align: center; font-size: 0.8em; color: #888; margin-top: 2rem;">
+
+    **📋 Data Source:** [israel-alerts-data](https://github.com/dleshem/israel-alerts-data)
+    (Apache 2.0) ·
+    **📊 Dashboard:** [MIT License](https://github.com/lleviraz/emergency-alerts-stats/blob/main/LICENSE)
+
+    ⚠️ **Disclaimer:** This dashboard is provided AS-IS with no warranty.
+    Predictions are statistical estimates, not guarantees.
+    For official guidance, consult your country's civil defense authorities.
+
+    Data is aggregated from crowd-sourced civil defense alerts and may not reflect official sources.
+
+    </div>
+    """,
+    unsafe_allow_html=True,
+)

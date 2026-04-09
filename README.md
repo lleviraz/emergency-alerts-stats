@@ -1,9 +1,23 @@
 # Israel Alerts Dashboard
 
-Live Streamlit dashboard for Israel civil defense alerts (sirens, pre-alerts, all-clears).
+Live Streamlit dashboard for analyzing Israel civil defense alerts (sirens, pre-alerts, all-clears, all-clear releases).
 
 **Live app:** [emergency-alerts-stats.streamlit.app](https://emergency-alerts-stats.streamlit.app)
-**Data source:** [github.com/dleshem/israel-alerts-data](https://github.com/dleshem/israel-alerts-data)
+**Data source:** [github.com/dleshem/israel-alerts-data](https://github.com/dleshem/israel-alerts-data) (Apache 2.0 license)
+
+---
+
+## ⚠️ Disclaimer
+
+**This dashboard is provided AS-IS for informational and analytical purposes only.**
+
+- **No Warranty:** The authors provide no warranty of any kind regarding the accuracy, completeness, or reliability of the data, analysis, or predictions.
+- **Data Source:** Alert data is sourced from [dleshem/israel-alerts-data](https://github.com/dleshem/israel-alerts-data), which aggregates publicly available civil defense alerts. The accuracy and timeliness of this data are not guaranteed.
+- **Not Official:** This is an independent analysis tool and is **not affiliated with or endorsed by any government or official civil defense agency**.
+- **No Liability:** Users of this dashboard assume all risk. The authors are not liable for any direct, indirect, or consequential damages arising from its use.
+- **Predictions:** Machine learning predictions (convergence rate, timing distributions) are statistical estimates based on historical data and **should not be relied upon as ground truth** for decision-making in emergency situations.
+
+**For official civil defense guidance, always refer to your country's official authorities.**
 
 ---
 
